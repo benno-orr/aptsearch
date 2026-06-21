@@ -1,0 +1,24 @@
+# secrets / credentials
+.google_key
+.turso_key
+
+# browser profiles (per-user, large)
+.fb_profile/
+.zillow_profile/
+
+# local DB cache + backups (shared DB lives in Turso)
+listings.db
+listings.db.bak
+*.bak
+
+# python venv + caches
+.venv/
+__pycache__/
+*.pyc
+
+# generated output
+listings.html
+htmls/
+
+# macOS
+.DS_Store

@@ -1,0 +1,5 @@
+# Copy this file to ".turso_key" and fill in your shared Turso database creds.
+# The real .turso_key is gitignored — never commit it.
+# Get both values from the Turso dashboard (https://turso.tech) or CLI.
+TURSO_DATABASE_URL=libsql://your-db-name-your-org.turso.io
+TURSO_AUTH_TOKEN=your-long-auth-token-here
