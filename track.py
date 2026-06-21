@@ -1866,14 +1866,27 @@ def row_meta(r):
 
 
 def backfill_derived(conn):
-    """Populate neighborhood / meta / amenities columns for all rows (no network)."""
+    """Populate neighborhood / meta / amenities columns for all rows.
+
+    Derived values are deterministic, so only rows that actually changed are
+    written — repeated calls (e.g. on every page load) issue no UPDATEs when
+    nothing changed, which matters for the remote/shared DB where each write is
+    a network round-trip."""
+    dirty = False
     for r in conn.execute("SELECT * FROM listings").fetchall():
         meta = row_meta(r)
+        hood = meta["neighborhood"]
+        meta_json = _json.dumps(meta)
+        amen_json = _json.dumps(row_amenities(r))
+        if r["neighborhood"] == hood and r["meta"] == meta_json and r["amenities"] == amen_json:
+            continue
         conn.execute(
             "UPDATE listings SET neighborhood=?, meta=?, amenities=? WHERE id=?",
-            (meta["neighborhood"], _json.dumps(meta), _json.dumps(row_amenities(r)), r["id"]),
+            (hood, meta_json, amen_json, r["id"]),
         )
-    conn.commit()
+        dirty = True
+    if dirty:
+        conn.commit()
 
 
 _AM_DEFS = [
