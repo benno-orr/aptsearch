@@ -1,8 +1,8 @@
 # aptsearch
 
 Apartment listing tracker for a 1BR in Cambridge/Somerville. Scrapes Craigslist,
-Apartments.com, Zillow, and Facebook Marketplace; scores listings by commute to
-Kendall/Broad; serves a web UI with status + notes.
+Apartments.com, Zillow, Rent.com, and Facebook Marketplace; scores listings by
+commute to Kendall/Broad; serves a web UI with status + notes.
 
 - `track.py` — scraper + CLI (the engine)
 - `server.py` — local web UI (status buttons, notes)

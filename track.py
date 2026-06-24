@@ -225,6 +225,10 @@ _SEARCH_LINKS = [
      "https://www.zillow.com/cambridge-ma/rentals/1-_beds/2000-2800_mp/"),
     ("Zillow — Somerville 1BR $2000-2800",
      "https://www.zillow.com/somerville-ma/rentals/1-_beds/2000-2800_mp/"),
+    ("Rent.com — Cambridge 1BR",
+     "https://www.rent.com/massachusetts/cambridge-apartments?bedrooms=1"),
+    ("Rent.com — Somerville 1BR",
+     "https://www.rent.com/massachusetts/somerville-apartments?bedrooms=1"),
     ("Redfin — Cambridge",
      "https://www.redfin.com/city/2833/MA/Cambridge/1-bedroom-apartments-for-rent"),
     ("Redfin — Somerville",
@@ -320,6 +324,7 @@ h1{{font-size:1.6em;margin-bottom:4px}}
 .src-facebook{{background:#dbeafe;color:#1e40af}}
 .src-apartments{{background:#dcfce7;color:#166534}}
 .src-zillow{{background:#ede9fe;color:#5b21b6}}
+.src-rent{{background:#fee2e2;color:#b91c1c}}
 .notes{{margin-top:10px;font-size:0.82em;color:#555;background:#f9fafb;border-radius:6px;padding:8px 10px;white-space:pre-wrap;border-left:3px solid #e5e7eb}}
 .date{{margin-left:auto;font-size:0.78em;color:#bbb}}
 .minimap{{width:100%;aspect-ratio:1/1;border-radius:8px;margin:8px 0 2px;background:#e8eaed;z-index:0;cursor:pointer}}
@@ -1072,6 +1077,119 @@ ZILLOW_URLS = [
     ("Cambridge 1BR",  "https://www.zillow.com/cambridge-ma/rentals/1-_beds/2000-2800_mp/"),
     ("Somerville 1BR", "https://www.zillow.com/somerville-ma/rentals/1-_beds/2000-2800_mp/"),
 ]
+
+
+# Rent.com: bedrooms=1 is honored; price filtering is path-based and unreliable,
+# so we pass only bedrooms and budget-filter the 1BR floor plans client-side.
+RENT_URLS = [
+    ("Cambridge 1BR",  "https://www.rent.com/massachusetts/cambridge-apartments?bedrooms=1"),
+    ("Somerville 1BR", "https://www.rent.com/massachusetts/somerville-apartments?bedrooms=1"),
+]
+
+
+def scrape_rent():
+    """Scrape Rent.com via the embedded __NEXT_DATA__ JSON.
+
+    Rent.com serves the full listing payload in the initial HTML (no bot wall on
+    a plain GET as of 2026-06), so a simple urllib fetch is enough — no headed
+    browser needed. Listings are building/complex cards: each has location
+    lat/lng and a floorPlans[] list; we extract the cheapest 1-bedroom floor
+    plan and budget-filter to <= 2800 client-side (the URL price filter is
+    path-based and not reliably honored).
+    """
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate",
+    }
+
+    results = []
+    for label, url in RENT_URLS:
+        print(f"  [rent] Loading {label}...")
+        try:
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                raw = resp.read()
+                if resp.headers.get("Content-Encoding", "") == "gzip":
+                    raw = gzip.decompress(raw)
+                html = raw.decode("utf-8", errors="replace")
+        except Exception as e:
+            print(f"  [rent] Failed loading {label}: {e}")
+            continue
+
+        m = re.search(
+            r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>',
+            html, re.S,
+        )
+        if not m:
+            print(f"  [rent] No data payload for {label} (page layout changed?)")
+            continue
+        try:
+            data = _json.loads(m.group(1))
+            items = (data.get("props", {}).get("pageProps", {}).get("pageData", {})
+                     .get("location", {}).get("listingSearch", {}).get("listings", []))
+        except Exception as e:
+            print(f"  [rent] Could not parse payload for {label}: {e}")
+            continue
+
+        for it in items:
+            try:
+                path = it.get("urlPathname") or ""
+                if not path:
+                    continue
+                full_url = path if path.startswith("http") else "https://www.rent.com" + path
+
+                # cheapest 1-bedroom floor plan
+                one_br = [fp for fp in (it.get("floorPlans") or [])
+                          if fp.get("bedCount") == 1 and fp.get("priceRange")]
+                price_int = None
+                if one_br:
+                    price_int = min(fp["priceRange"]["min"] for fp in one_br
+                                    if fp["priceRange"].get("min"))
+                if not price_int:
+                    continue  # no priced 1BR unit — can't budget-check, drop
+
+                loc  = it.get("location") or {}
+                city = loc.get("city") or ""
+                name = it.get("name") or city
+                location = ", ".join(x for x in (city, loc.get("stateAbbr")) if x)
+
+                results.append({
+                    "url":       full_url,
+                    "title":     name,
+                    "price":     f"${price_int:,}",
+                    "price_int": price_int,
+                    "location":  location,
+                    "date":      "",
+                    "source":    "rent",
+                    "image":     "",
+                    "_lat":      loc.get("lat"),
+                    "_lon":      loc.get("lng"),
+                    "_laundry":  0,   # not exposed on search cards
+                    "_avail":    "",
+                })
+            except Exception:
+                continue
+        print(f"         → {len(items)} on page")
+
+    # dedupe + area/shared/budget filters
+    seen, unique = set(), []
+    for r in results:
+        if r["url"] in seen:
+            continue
+        seen.add(r["url"])
+        if not in_camb_som(r.get("location") or ""):
+            continue
+        if is_shared(r.get("title") or ""):
+            continue
+        if r["price_int"] > 2800:
+            continue
+        unique.append(r)
+    return unique
 
 
 async def _scrape_zillow_pw():
@@ -2488,6 +2606,37 @@ def cmd_fetch_zillow(args):
             print(f"Saved {len(added)} listings.")
 
 
+def cmd_fetch_rent(args):
+    print("Fetching Rent.com (Cambridge + Somerville 1BR, <= $2800)...\n")
+    try:
+        results = scrape_rent()
+    except Exception as e:
+        print(f"  [!] Rent.com scrape failed: {e}")
+        return
+
+    if not results:
+        print("No results (none match or page layout changed). Browse manually:")
+        for _label, url in RENT_URLS:
+            print(f"  {url}")
+        return
+
+    _enrich(results)
+    conn = db_connect()
+    new, seen = [], []
+    for r in results:
+        fp = fingerprint(r.get("title"), r.get("location"), r.get("price_int"))
+        dup, _dupid = is_duplicate(conn, r["url"], fp)
+        (seen if dup else new).append(r)
+
+    _print_fetched(new, f"NEW Rent.com listings ({len(new)} of {len(results)}, {len(seen)} already in DB):")
+
+    if new:
+        save = ask(f"\nSave {len(new)} listing(s) to DB? [y/N] ")
+        if save.lower() == "y":
+            added, _ = _save_listings(conn, new, "rent")
+            print(f"Saved {len(added)} listings.")
+
+
 def cmd_fetch_fb(args):
     if not _has_playwright():
         print("Playwright is required for Facebook Marketplace scraping.")
@@ -2597,7 +2746,7 @@ def cmd_daily(args):
     all_new = []
 
     # ── Craigslist ──
-    print("1/4  Craigslist...")
+    print("1/5  Craigslist...")
     try:
         cl_results = scrape_craigslist()
         _enrich(cl_results)
@@ -2616,7 +2765,7 @@ def cmd_daily(args):
         print(f"     failed: {e}")
 
     # ── Apartments.com ──
-    print("2/4  Apartments.com...")
+    print("2/5  Apartments.com...")
     try:
         apts_results = asyncio.run(_scrape_apts_pw())
         _enrich(apts_results)
@@ -2635,7 +2784,7 @@ def cmd_daily(args):
         print(f"     failed: {e}")
 
     # ── Zillow ──
-    print("3/4  Zillow...")
+    print("3/5  Zillow...")
     try:
         z_results = asyncio.run(_scrape_zillow_pw())
         _enrich(z_results)
@@ -2648,9 +2797,28 @@ def cmd_daily(args):
         runs.append({"label": "Zillow", "url": ZILLOW_URLS[0][1], "total": 0, "new_count": 0, "error": str(e)})
         print(f"     failed: {e}")
 
+    # ── Rent.com ──
+    print("4/5  Rent.com...")
+    try:
+        rent_results = scrape_rent()
+        _enrich(rent_results)
+        new, seen = [], []
+        for r in rent_results:
+            fp = fingerprint(r.get("title"), r.get("location"), r.get("price_int"))
+            dup, _dupid = is_duplicate(conn, r["url"], fp)
+            (seen if dup else new).append(r)
+        added, _ = _save_listings(conn, new, "rent")
+        all_new.extend(added)
+        runs.append({"label": "Rent.com (Cambridge + Somerville 1BR)", "url": RENT_URLS[0][1],
+                     "total": len(rent_results), "new_count": len(added)})
+        print(f"     {len(rent_results)} found, {len(added)} new")
+    except Exception as e:
+        runs.append({"label": "Rent.com", "url": RENT_URLS[0][1], "total": 0, "new_count": 0, "error": str(e)})
+        print(f"     failed: {e}")
+
     # ── Facebook Marketplace ──
     if getattr(args, "skip_fb", False):
-        print("4/4  Facebook Marketplace — skipped (--skip-fb)")
+        print("5/5  Facebook Marketplace — skipped (--skip-fb)")
         runs.append({"label": "Facebook Marketplace", "url": FB_SEARCH_URL,
                      "total": 0, "new_count": 0, "error": "skipped (--skip-fb)"})
         fb_skipped = True
@@ -2818,6 +2986,7 @@ def main():
     sub.add_parser("fetch-fb")
     sub.add_parser("fetch-apts")
     sub.add_parser("fetch-zillow")
+    sub.add_parser("fetch-rent")
     sub.add_parser("update")
     sub.add_parser("html")
     sub.add_parser("daily").add_argument("--skip-fb", action="store_true",
@@ -2858,6 +3027,7 @@ def main():
         "fetch-fb":   cmd_fetch_fb,
         "fetch-apts": cmd_fetch_apts,
         "fetch-zillow": cmd_fetch_zillow,
+        "fetch-rent": cmd_fetch_rent,
         "update":     cmd_update,
         "html":       cmd_html,
         "daily":      cmd_daily,

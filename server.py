@@ -80,6 +80,16 @@ def _run_refresh(source):
             except Exception as e:
                 _log(f"Zillow FAILED: {e}")
 
+        if source in ("rent", "all"):
+            _log("Rent.com: fetching (headless)...")
+            try:
+                results = track.scrape_rent()
+                track._enrich(results)
+                added, skipped = track._save_listings(conn, results, "rent")
+                _log(f"Rent.com: {len(results)} found, {len(added)} new saved")
+            except Exception as e:
+                _log(f"Rent.com FAILED: {e}")
+
         if source in ("fb", "all"):
             _log("Facebook: fetching (needs saved login in .fb_profile)...")
             try:
@@ -116,6 +126,7 @@ _CONTROLS = """
       <option value="craigslist">Craigslist</option>
       <option value="apartments">Apartments.com</option>
       <option value="zillow">Zillow</option>
+      <option value="rent">Rent.com</option>
       <option value="facebook">Facebook</option>
     </select>
   </label>
@@ -135,6 +146,7 @@ _CONTROLS = """
   <button class="btn-refresh" id="r-cl"   onclick="refresh('cl')">&#8635; Craigslist</button>
   <button class="btn-refresh" id="r-apts" onclick="refresh('apts')">&#8635; Apartments.com</button>
   <button class="btn-refresh" id="r-zillow" onclick="refresh('zillow')">&#8635; Zillow</button>
+  <button class="btn-refresh" id="r-rent" onclick="refresh('rent')">&#8635; Rent.com</button>
   <button class="btn-refresh" id="r-fb"   onclick="refresh('fb')">&#8635; Facebook</button>
   <button class="btn-refresh" id="r-all"  onclick="refresh('all')">&#8635; All</button>
 </div>
