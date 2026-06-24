@@ -48,6 +48,7 @@ def _run_refresh(source):
             try:
                 results = track.scrape_craigslist()
                 track._enrich(results)
+                track.backfill_listing_dates(conn, results)
                 added, skipped = track._save_listings(conn, results, "craigslist")
                 _log(f"Craigslist: {len(results)} found, {len(added)} new saved")
             except Exception as e:
@@ -58,6 +59,7 @@ def _run_refresh(source):
             try:
                 results = asyncio.run(track._scrape_apts_pw())
                 track._enrich(results)
+                track.backfill_listing_dates(conn, results)
                 added, skipped = track._save_listings(conn, results, "apartments")
                 if not results:
                     _log("Apartments.com: 0 results — likely Akamai rate-limit; try later")
@@ -71,6 +73,7 @@ def _run_refresh(source):
             try:
                 results = asyncio.run(track._scrape_zillow_pw())
                 track._enrich(results)
+                track.backfill_listing_dates(conn, results)
                 added, skipped = track._save_listings(conn, results, "zillow")
                 if not results:
                     _log("Zillow: 0 results — if bot-blocked, run "
@@ -85,6 +88,7 @@ def _run_refresh(source):
             try:
                 results = track.scrape_rent()
                 track._enrich(results)
+                track.backfill_listing_dates(conn, results)
                 added, skipped = track._save_listings(conn, results, "rent")
                 _log(f"Rent.com: {len(results)} found, {len(added)} new saved")
             except Exception as e:
@@ -95,6 +99,7 @@ def _run_refresh(source):
             try:
                 results = asyncio.run(track._scrape_hotpads_pw())
                 track._enrich(results)
+                track.backfill_listing_dates(conn, results)
                 added, skipped = track._save_listings(conn, results, "hotpads")
                 if not results:
                     _log("HotPads: 0 results — if bot-blocked, run "
@@ -109,6 +114,7 @@ def _run_refresh(source):
             try:
                 results = asyncio.run(track._scrape_fb_pw())
                 track._enrich(results)
+                track.backfill_listing_dates(conn, results)
                 added, skipped = track._save_listings(conn, results, "facebook")
                 if not results:
                     _log("Facebook: 0 results — if not logged in, run "

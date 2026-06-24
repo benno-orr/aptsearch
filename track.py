@@ -133,6 +133,60 @@ def sept_score(text):
     return 1 if text and _SEPT_RE.search(text) else 0
 
 
+_MONTH_NUM = {'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'may': 5, 'jun': 6,
+              'jul': 7, 'aug': 8, 'sep': 9, 'sept': 9, 'oct': 10, 'nov': 11, 'dec': 12}
+
+
+def epoch_ms_to_ymd(ms):
+    """Epoch milliseconds → 'YYYY-MM-DD', or None on bad input."""
+    try:
+        return datetime.fromtimestamp(int(ms) / 1000).strftime("%Y-%m-%d")
+    except (TypeError, ValueError, OSError):
+        return None
+
+
+def _fmt_md(mo, day):
+    """(month_int, day_int_or_None) → 'Sep 1' / 'Sep', or '' if out of range."""
+    if not (1 <= mo <= 12):
+        return ""
+    if day and 1 <= day <= 31:
+        return f"{_MONTHS[mo]} {day}"
+    return _MONTHS[mo]
+
+
+def parse_move_in(value):
+    """Normalize any availability/move-in value to a short display string
+    ('Sep 1', 'Aug 15', 'Now') or '' when unknown/unparseable.
+
+    Handles: epoch ms, ISO dates ('2026-09-01T..'), 'M/D', month names
+    ('Aug 1', 'September 1st', 'Sept'), and 'available now / asap / immediately'."""
+    if value is None:
+        return ""
+    # epoch milliseconds (e.g. HotPads timestamps)
+    if isinstance(value, (int, float)):
+        ymd = epoch_ms_to_ymd(value)
+        if ymd:
+            return _fmt_md(int(ymd[5:7]), int(ymd[8:10]))
+        return ""
+    s = str(value).strip()
+    if not s:
+        return ""
+    low = s.lower()
+    if any(w in low for w in ("now", "immediat", "asap", "today", "ready to", "available now")):
+        return "Now"
+    m = re.match(r'(\d{4})-(\d{2})-(\d{2})', s)            # ISO date / datetime
+    if m:
+        return _fmt_md(int(m.group(2)), int(m.group(3)))
+    m = re.match(r'(\d{1,2})[/.](\d{1,2})', s)             # M/D or M/D/YY
+    if m:
+        return _fmt_md(int(m.group(1)), int(m.group(2)))
+    m = re.search(r'\b(jan|feb|mar|apr|may|jun|jul|aug|sept|sep|oct|nov|dec)[a-z]*\.?\s*(\d{0,2})', low)
+    if m:                                                   # month name + optional day
+        day = int(m.group(2)) if m.group(2) else None
+        return _fmt_md(_MONTH_NUM[m.group(1)], day)
+    return ""
+
+
 def row_available(r):
     try:
         return r["available"] or ""
@@ -449,15 +503,7 @@ table.ss td.new-count{{font-weight:700;color:#166534}}
         if (pts && pts.length > 1)
           L.polyline(shift(pts, k), {{color:color, weight:W, opacity:1}}).addTo(map);
       }}
-      function drawTransit(segs, color, k) {{
-        if (!segs || !segs.length) return;
-        if (Array.isArray(segs[0])) {{ line(segs, color, k); return; }}
-        segs.forEach(function(s) {{ line(s.pts, color, k); }});
-      }}
-      line(routes.walk, '#16a34a', -1.5);            // 🚶 green
-      line(routes.bike, '#ec4899', -0.5);            // 🚴 pink
-      drawTransit(routes.subway, '#7c3aed', 0.5);    // 🚇 purple
-      drawTransit(routes.bus, '#ca8a04', 1.5);        // 🚌 amber
+      line(routes.walk, '#16a34a', 0);               // 🚶 green — walking route only
       el.title = approx ? 'Approximate location (geocoded from area)' : 'Exact location';
       el.addEventListener('click', function(){{
         window.open('https://www.openstreetmap.org/?mlat='+lat+'&mlon='+lon+'#map=16/'+lat+'/'+lon, '_blank');
@@ -1146,15 +1192,14 @@ def scrape_rent():
                     continue
                 full_url = path if path.startswith("http") else "https://www.rent.com" + path
 
-                # cheapest 1-bedroom floor plan
+                # cheapest 1-bedroom floor plan (take its price + move-in date)
                 one_br = [fp for fp in (it.get("floorPlans") or [])
-                          if fp.get("bedCount") == 1 and fp.get("priceRange")]
-                price_int = None
-                if one_br:
-                    price_int = min(fp["priceRange"]["min"] for fp in one_br
-                                    if fp["priceRange"].get("min"))
-                if not price_int:
+                          if fp.get("bedCount") == 1
+                          and (fp.get("priceRange") or {}).get("min")]
+                if not one_br:
                     continue  # no priced 1BR unit — can't budget-check, drop
+                cheapest = min(one_br, key=lambda fp: fp["priceRange"]["min"])
+                price_int = cheapest["priceRange"]["min"]
 
                 loc  = it.get("location") or {}
                 city = loc.get("city") or ""
@@ -1173,7 +1218,9 @@ def scrape_rent():
                     "_lat":      loc.get("lat"),
                     "_lon":      loc.get("lng"),
                     "_laundry":  0,   # not exposed on search cards
-                    "_avail":    "",
+                    # move-in from the floor plan's availability; Rent.com doesn't
+                    # expose an original-listing date, so _listed_on stays blank.
+                    "_avail":    cheapest.get("availableDate") or "",
                 })
             except Exception:
                 continue
@@ -1451,6 +1498,10 @@ async def _scrape_hotpads_pw():
                                 "_lon":      geo.get("lon"),
                                 "_house":    1 if ptype in _HOTPADS_HOUSE_TYPES else 0,
                                 "_laundry":  0,   # not exposed on search cards
+                                # `activated` = epoch ms when first listed. Move-in
+                                # date isn't exposed by the search API and the pad
+                                # detail pages are bot-walled, so it stays blank.
+                                "_listed_on": epoch_ms_to_ymd(lst.get("activated")),
                                 "_avail":    "",
                             })
                         except Exception:
@@ -2645,8 +2696,14 @@ def _enrich(results):
         r["_score"]   = neighborhood_score(r.get("location", ""))
         r["_house"]   = r.get("_house") or house_score((r.get("title") or "") + " " + (r.get("location") or ""))
         r["_laundry"] = r.get("_laundry") or laundry_score(r.get("title") or "")
-        r["_avail"]   = r.get("_avail") or ("9/1" if sept_score(r.get("title") or "") else "")
-        r["_sept"]    = 1 if sept_score(r.get("_avail") or "") else 0
+        # Normalize whatever the scraper captured (ISO date, epoch, "Available
+        # Now", month text…) to a short display string. Fall back to a Sept-1
+        # mention in the title only when no real availability date was found.
+        avail = parse_move_in(r.get("_avail"))
+        if not avail and sept_score(r.get("title") or ""):
+            avail = "Sep 1"
+        r["_avail"]   = avail
+        r["_sept"]    = 1 if sept_score(avail) else 0
         r["_ec"]      = row_is_east_cam(r)
     results.sort(key=lambda r: -(r["_ec"] * 20 + r["_score"] * 2 + r["_house"] * 2 + r["_laundry"] + r["_sept"]))
     return results
@@ -2684,6 +2741,38 @@ def _save_listings(conn, results, source):
     return added, skipped
 
 
+def backfill_listing_dates(conn, results):
+    """Fill empty listed_on / available on EXISTING rows from freshly scraped
+    values. Re-scrapes skip duplicates, so without this the date columns added
+    to already-saved listings would never populate. Purely additive: only writes
+    a column that is currently blank, so manual edits and prior values are kept.
+    Returns the number of rows updated."""
+    n = 0
+    for r in results:
+        listed = r.get("_listed_on")
+        avail  = r.get("_avail")
+        if not listed and not avail:
+            continue
+        row = conn.execute(
+            "SELECT id, listed_on, available FROM listings WHERE url=?", (r["url"],)
+        ).fetchone()
+        if not row:
+            continue
+        sets, params = [], []
+        if listed and not (row["listed_on"] or ""):
+            sets.append("listed_on=?"); params.append(listed)
+        if avail and not (row["available"] or ""):
+            sets.append("available=?"); params.append(avail)
+        if not sets:
+            continue
+        params.append(row["id"])
+        conn.execute(f"UPDATE listings SET {', '.join(sets)} WHERE id=?", params)
+        n += 1
+    if n:
+        conn.commit()
+    return n
+
+
 def cmd_fetch_cl(args):
     print(f"Fetching Craigslist (house/duplex/townhouse types)...\n")
     results = scrape_craigslist()
@@ -2697,6 +2786,7 @@ def cmd_fetch_cl(args):
 
     _enrich(results)
     conn = db_connect()
+    backfill_listing_dates(conn, results)
     new, seen = [], []
     for r in results:
         fp = fingerprint(r.get("title"), r.get("location"), r.get("price_int"))
@@ -2727,6 +2817,7 @@ def cmd_fetch_apts(args):
 
     _enrich(results)
     conn = db_connect()
+    backfill_listing_dates(conn, results)
     new, seen = [], []
     for r in results:
         fp = fingerprint(r.get("title"), r.get("location"), r.get("price_int"))
@@ -2761,6 +2852,7 @@ def cmd_fetch_zillow(args):
 
     _enrich(results)
     conn = db_connect()
+    backfill_listing_dates(conn, results)
     new, seen = [], []
     for r in results:
         fp = fingerprint(r.get("title"), r.get("location"), r.get("price_int"))
@@ -2796,6 +2888,7 @@ def cmd_fetch_hotpads(args):
 
     _enrich(results)
     conn = db_connect()
+    backfill_listing_dates(conn, results)
     new, seen = [], []
     for r in results:
         fp = fingerprint(r.get("title"), r.get("location"), r.get("price_int"))
@@ -2827,6 +2920,7 @@ def cmd_fetch_rent(args):
 
     _enrich(results)
     conn = db_connect()
+    backfill_listing_dates(conn, results)
     new, seen = [], []
     for r in results:
         fp = fingerprint(r.get("title"), r.get("location"), r.get("price_int"))
@@ -2861,6 +2955,7 @@ def cmd_fetch_fb(args):
 
     _enrich(results)
     conn = db_connect()
+    backfill_listing_dates(conn, results)
     new, seen = [], []
     for r in results:
         fp = fingerprint(r.get("title"), r.get("location"), r.get("price_int"))
@@ -2887,6 +2982,7 @@ def cmd_update(args):
 
     _enrich(results)
     conn = db_connect()
+    backfill_listing_dates(conn, results)
     added, skipped = _save_listings(conn, results, "craigslist")
 
     print(f"  {len(results)} fetched  |  {len(added)} new  |  {len(skipped)} duplicates skipped\n")
@@ -2955,6 +3051,7 @@ def cmd_daily(args):
     try:
         cl_results = scrape_craigslist()
         _enrich(cl_results)
+        backfill_listing_dates(conn, cl_results)
         new, seen = [], []
         for r in cl_results:
             fp = fingerprint(r.get("title"), r.get("location"), r.get("price_int"))
@@ -2974,6 +3071,7 @@ def cmd_daily(args):
     try:
         apts_results = asyncio.run(_scrape_apts_pw())
         _enrich(apts_results)
+        backfill_listing_dates(conn, apts_results)
         new, seen = [], []
         for r in apts_results:
             fp = fingerprint(r.get("title"), r.get("location"), r.get("price_int"))
@@ -2993,6 +3091,7 @@ def cmd_daily(args):
     try:
         z_results = asyncio.run(_scrape_zillow_pw())
         _enrich(z_results)
+        backfill_listing_dates(conn, z_results)
         added, _skipped = _save_listings(conn, z_results, "zillow")
         all_new.extend(added)
         runs.append({"label": "Zillow (Cambridge + Somerville 1BR)", "url": ZILLOW_URLS[0][1],
@@ -3007,6 +3106,7 @@ def cmd_daily(args):
     try:
         rent_results = scrape_rent()
         _enrich(rent_results)
+        backfill_listing_dates(conn, rent_results)
         new, seen = [], []
         for r in rent_results:
             fp = fingerprint(r.get("title"), r.get("location"), r.get("price_int"))
@@ -3026,6 +3126,7 @@ def cmd_daily(args):
     try:
         hp_results = asyncio.run(_scrape_hotpads_pw())
         _enrich(hp_results)
+        backfill_listing_dates(conn, hp_results)
         new, seen = [], []
         for r in hp_results:
             fp = fingerprint(r.get("title"), r.get("location"), r.get("price_int"))
@@ -3052,6 +3153,7 @@ def cmd_daily(args):
         try:
             fb_results = asyncio.run(_scrape_fb_pw())
             _enrich(fb_results)
+            backfill_listing_dates(conn, fb_results)
             new, seen = [], []
             for r in fb_results:
                 fp = fingerprint(r.get("title"), r.get("location"), r.get("price_int"))
