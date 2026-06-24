@@ -237,8 +237,10 @@ _SEARCH_LINKS = [
      "https://bostonpads.com/cambridge-ma-apartments/"),
     ("Boston Pads — Somerville",
      "https://bostonpads.com/somerville-ma-apartments/"),
-    ("HotPads — Cambridge/Somerville",
-     "https://hotpads.com/cambridge-ma/apartments-for-rent?minBeds=1&maxBeds=1&minPrice=2000&maxPrice=2800"),
+    ("HotPads — Cambridge 1BR $2000-2800",
+     "https://hotpads.com/cambridge-ma/apartments-for-rent?beds=1-1&price=2000-2800"),
+    ("HotPads — Somerville 1BR $2000-2800",
+     "https://hotpads.com/somerville-ma/apartments-for-rent?beds=1-1&price=2000-2800"),
 ]
 
 # ── HTML template ──────────────────────────────────────────────────────────────
@@ -325,6 +327,7 @@ h1{{font-size:1.6em;margin-bottom:4px}}
 .src-apartments{{background:#dcfce7;color:#166534}}
 .src-zillow{{background:#ede9fe;color:#5b21b6}}
 .src-rent{{background:#fee2e2;color:#b91c1c}}
+.src-hotpads{{background:#fef3c7;color:#b45309}}
 .notes{{margin-top:10px;font-size:0.82em;color:#555;background:#f9fafb;border-radius:6px;padding:8px 10px;white-space:pre-wrap;border-left:3px solid #e5e7eb}}
 .date{{margin-left:auto;font-size:0.78em;color:#bbb}}
 .minimap{{width:100%;aspect-ratio:1/1;border-radius:8px;margin:8px 0 2px;background:#e8eaed;z-index:0;cursor:pointer}}
@@ -1306,6 +1309,173 @@ async def _scrape_zillow_pw():
             continue
         if not r.get("price_int"):
             continue  # unpriced cards can't be budget-checked — drop
+        if r["price_int"] > 2800:
+            continue
+        unique.append(r)
+    return unique
+
+
+# ── HotPads scraper ───────────────────────────────────────────────────────────
+
+HOTPADS_PROFILE_DIR = os.path.join(SCRIPT_DIR, ".hotpads_profile")
+
+# Tight lat/lon box covering Cambridge + Somerville (the byCoordsV2 API is
+# bounding-box based; we still filter to Camb/Som by city client-side, since the
+# box bleeds into Medford/Arlington/Boston at the edges).
+HOTPADS_BBOX = {
+    "lat": 42.385, "lon": -71.12,
+    "minLat": 42.355, "maxLat": 42.418, "minLon": -71.17, "maxLon": -71.075,
+}
+HOTPADS_SEARCH_URL = (
+    "https://hotpads.com/cambridge-ma/apartments-for-rent?beds=1-1&price=2000-2800"
+)
+# propertyType values that count as a house/townhouse-style unit (preference).
+_HOTPADS_HOUSE_TYPES = {"house", "townhouse", "divided"}
+
+
+def _hotpads_api_url(offset, limit):
+    bb = HOTPADS_BBOX
+    return (
+        "https://hotpads.com/hotpads-api/api/v2/listing/byCoordsV2?"
+        "orderBy=score&searchSlug=apartments-for-rent&lowPrice=2000&highPrice=2800"
+        "&bedrooms=1"
+        "&bathrooms=0,0.5,1,1.5,2,2.5,3,3.5,4,4.5,5,5.5,6,6.5,7,7.5,8plus"
+        "&propertyTypes=condo,divided,garden,house,large,medium,townhouse"
+        "&listingTypes=rental,sublet,corporate"
+        "&includePhotosCollection=true"
+        f"&lat={bb['lat']}&lon={bb['lon']}"
+        f"&maxLat={bb['maxLat']}&maxLon={bb['maxLon']}"
+        f"&minLat={bb['minLat']}&minLon={bb['minLon']}"
+        f"&offset={offset}&limit={limit}&components=basic,model"
+    )
+
+
+def _hotpads_one_br_price(lst):
+    """Cheapest 1-bedroom price for a HotPads listing, or None."""
+    ms = [m for m in (lst.get("models") or [])
+          if m.get("numBeds") == 1 and m.get("lowPrice")]
+    if ms:
+        return int(min(m["lowPrice"] for m in ms))
+    summ = lst.get("modelSummary") or {}
+    if summ.get("minBeds") == 1 and summ.get("minPrice"):
+        return int(summ["minPrice"])
+    return None
+
+
+async def _scrape_hotpads_pw():
+    """Scrape HotPads via its internal byCoordsV2 listing API.
+
+    Notes (verified 2026-06):
+    - HotPads is a Zillow property and uses the same PerimeterX bot wall: a plain
+      GET 403s ("Access to this page has been denied"). We use a persistent
+      profile (.hotpads_profile) and a headed browser; solve any captcha once and
+      the clearance cookie persists for future runs.
+    - The SPA fetches listing cards from /hotpads-api/api/v2/listing/byCoordsV2
+      (bounding-box + filters). We call it directly from the authenticated page
+      context and parse data.buildings[].listings[]: each listing has an
+      uriMalone (detail URL), address, building geo (lat/lon), and a models[]
+      list of per-bedroom {numBeds, lowPrice, highPrice} we use for the 1BR price.
+    """
+    from playwright.async_api import async_playwright
+
+    results = []
+    async with async_playwright() as p:
+        ctx = await p.chromium.launch_persistent_context(
+            HOTPADS_PROFILE_DIR,
+            headless=False,
+            viewport={"width": 1280, "height": 900},
+            args=["--disable-blink-features=AutomationControlled"],
+        )
+        page = ctx.pages[0] if ctx.pages else await ctx.new_page()
+        try:
+            # Warm up so PerimeterX cookies / referer are valid for the API call.
+            for attempt in range(3):
+                await page.goto(HOTPADS_SEARCH_URL, wait_until="domcontentloaded", timeout=45000)
+                await page.wait_for_timeout(4000)
+                title = (await page.title()).lower()
+                if "denied" in title or "captcha" in title:
+                    if sys.stdin.isatty():
+                        print("  [hotpads] Bot check — solve the captcha in the browser "
+                              "window, then press Enter here...")
+                        ask("")
+                        continue
+                    print("  [hotpads] Blocked by bot detection. Run "
+                          "`python3 track.py fetch-hotpads` in a terminal once to solve "
+                          "the captcha; the clearance persists in .hotpads_profile.")
+                    await ctx.close()
+                    return []
+                break
+
+            # Paginate the API (limit 80 honored; ~350 in box → up to 5 pages).
+            offset, limit = 0, 80
+            for _ in range(6):
+                resp = await page.request.get(_hotpads_api_url(offset, limit))
+                if resp.status != 200:
+                    print(f"  [hotpads] API returned {resp.status} at offset {offset}")
+                    break
+                data = (await resp.json()).get("data", {}) or {}
+                buildings = data.get("buildings", []) or []
+                if not buildings:
+                    break
+
+                for b in buildings:
+                    geo = b.get("geo") or {}
+                    for lst in b.get("listings", []):
+                        try:
+                            uri = lst.get("uriMalone") or ""
+                            if not uri:
+                                continue
+                            full_url = uri if uri.startswith("http") else "https://hotpads.com" + uri
+
+                            price_int = _hotpads_one_br_price(lst)
+                            if not price_int:
+                                continue  # no priced 1BR unit — can't budget-check
+
+                            addr = lst.get("address") or {}
+                            city = addr.get("city") or ""
+                            street = "" if addr.get("hideStreet") else (addr.get("street") or "")
+                            name = lst.get("title") or street or city
+                            location = ", ".join(x for x in (street, city, addr.get("state")) if x)
+
+                            ptype = (lst.get("propertyType") or "").lower()
+                            results.append({
+                                "url":       full_url,
+                                "title":     name,
+                                "price":     f"${price_int:,}",
+                                "price_int": price_int,
+                                "location":  location,
+                                "date":      "",
+                                "source":    "hotpads",
+                                "image":     lst.get("medPhotoUrl") or "",
+                                "_lat":      geo.get("lat"),
+                                "_lon":      geo.get("lon"),
+                                "_house":    1 if ptype in _HOTPADS_HOUSE_TYPES else 0,
+                                "_laundry":  0,   # not exposed on search cards
+                                "_avail":    "",
+                            })
+                        except Exception:
+                            continue
+
+                offset += limit
+                if offset >= (data.get("numListingsAvailable") or 0):
+                    break
+                await page.wait_for_timeout(800)
+            print(f"         → {len(results)} listings collected (pre-filter)")
+        except Exception as e:
+            print(f"  [hotpads] Failed: {e}")
+        finally:
+            await ctx.close()
+
+    # dedupe + area/shared/budget filters
+    seen, unique = set(), []
+    for r in results:
+        if r["url"] in seen:
+            continue
+        seen.add(r["url"])
+        if not in_camb_som(r.get("location") or ""):
+            continue
+        if is_shared(r.get("title") or ""):
+            continue
         if r["price_int"] > 2800:
             continue
         unique.append(r)
@@ -2606,6 +2776,41 @@ def cmd_fetch_zillow(args):
             print(f"Saved {len(added)} listings.")
 
 
+def cmd_fetch_hotpads(args):
+    if not _has_playwright():
+        print("Playwright is required for HotPads scraping.")
+        print("Install: pip install playwright && playwright install chromium")
+        sys.exit(1)
+
+    print("Fetching HotPads (Cambridge + Somerville 1BR, <= $2800)...\n")
+    try:
+        results = asyncio.run(_scrape_hotpads_pw())
+    except Exception as e:
+        print(f"  [!] HotPads scrape failed: {e}")
+        return
+
+    if not results:
+        print("No results (bot-blocked or none match). If blocked, run this once in a "
+              "terminal to solve the captcha; clearance persists in .hotpads_profile.")
+        return
+
+    _enrich(results)
+    conn = db_connect()
+    new, seen = [], []
+    for r in results:
+        fp = fingerprint(r.get("title"), r.get("location"), r.get("price_int"))
+        dup, _dupid = is_duplicate(conn, r["url"], fp)
+        (seen if dup else new).append(r)
+
+    _print_fetched(new, f"NEW HotPads listings ({len(new)} of {len(results)}, {len(seen)} already in DB):")
+
+    if new:
+        save = ask(f"\nSave {len(new)} listing(s) to DB? [y/N] ")
+        if save.lower() == "y":
+            added, _ = _save_listings(conn, new, "hotpads")
+            print(f"Saved {len(added)} listings.")
+
+
 def cmd_fetch_rent(args):
     print("Fetching Rent.com (Cambridge + Somerville 1BR, <= $2800)...\n")
     try:
@@ -2746,7 +2951,7 @@ def cmd_daily(args):
     all_new = []
 
     # ── Craigslist ──
-    print("1/5  Craigslist...")
+    print("1/6  Craigslist...")
     try:
         cl_results = scrape_craigslist()
         _enrich(cl_results)
@@ -2765,7 +2970,7 @@ def cmd_daily(args):
         print(f"     failed: {e}")
 
     # ── Apartments.com ──
-    print("2/5  Apartments.com...")
+    print("2/6  Apartments.com...")
     try:
         apts_results = asyncio.run(_scrape_apts_pw())
         _enrich(apts_results)
@@ -2784,7 +2989,7 @@ def cmd_daily(args):
         print(f"     failed: {e}")
 
     # ── Zillow ──
-    print("3/5  Zillow...")
+    print("3/6  Zillow...")
     try:
         z_results = asyncio.run(_scrape_zillow_pw())
         _enrich(z_results)
@@ -2798,7 +3003,7 @@ def cmd_daily(args):
         print(f"     failed: {e}")
 
     # ── Rent.com ──
-    print("4/5  Rent.com...")
+    print("4/6  Rent.com...")
     try:
         rent_results = scrape_rent()
         _enrich(rent_results)
@@ -2816,9 +3021,28 @@ def cmd_daily(args):
         runs.append({"label": "Rent.com", "url": RENT_URLS[0][1], "total": 0, "new_count": 0, "error": str(e)})
         print(f"     failed: {e}")
 
+    # ── HotPads ──
+    print("5/6  HotPads...")
+    try:
+        hp_results = asyncio.run(_scrape_hotpads_pw())
+        _enrich(hp_results)
+        new, seen = [], []
+        for r in hp_results:
+            fp = fingerprint(r.get("title"), r.get("location"), r.get("price_int"))
+            dup, _dupid = is_duplicate(conn, r["url"], fp)
+            (seen if dup else new).append(r)
+        added, _ = _save_listings(conn, new, "hotpads")
+        all_new.extend(added)
+        runs.append({"label": "HotPads (Cambridge + Somerville 1BR)", "url": HOTPADS_SEARCH_URL,
+                     "total": len(hp_results), "new_count": len(added)})
+        print(f"     {len(hp_results)} found, {len(added)} new")
+    except Exception as e:
+        runs.append({"label": "HotPads", "url": HOTPADS_SEARCH_URL, "total": 0, "new_count": 0, "error": str(e)})
+        print(f"     failed: {e}")
+
     # ── Facebook Marketplace ──
     if getattr(args, "skip_fb", False):
-        print("5/5  Facebook Marketplace — skipped (--skip-fb)")
+        print("6/6  Facebook Marketplace — skipped (--skip-fb)")
         runs.append({"label": "Facebook Marketplace", "url": FB_SEARCH_URL,
                      "total": 0, "new_count": 0, "error": "skipped (--skip-fb)"})
         fb_skipped = True
@@ -2987,6 +3211,7 @@ def main():
     sub.add_parser("fetch-apts")
     sub.add_parser("fetch-zillow")
     sub.add_parser("fetch-rent")
+    sub.add_parser("fetch-hotpads")
     sub.add_parser("update")
     sub.add_parser("html")
     sub.add_parser("daily").add_argument("--skip-fb", action="store_true",
@@ -3028,6 +3253,7 @@ def main():
         "fetch-apts": cmd_fetch_apts,
         "fetch-zillow": cmd_fetch_zillow,
         "fetch-rent": cmd_fetch_rent,
+        "fetch-hotpads": cmd_fetch_hotpads,
         "update":     cmd_update,
         "html":       cmd_html,
         "daily":      cmd_daily,

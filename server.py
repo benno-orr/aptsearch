@@ -90,6 +90,20 @@ def _run_refresh(source):
             except Exception as e:
                 _log(f"Rent.com FAILED: {e}")
 
+        if source in ("hotpads", "all"):
+            _log("HotPads: fetching (opens a browser window)...")
+            try:
+                results = asyncio.run(track._scrape_hotpads_pw())
+                track._enrich(results)
+                added, skipped = track._save_listings(conn, results, "hotpads")
+                if not results:
+                    _log("HotPads: 0 results — if bot-blocked, run "
+                         "`python3 track.py fetch-hotpads` in a terminal once to solve the captcha")
+                else:
+                    _log(f"HotPads: {len(results)} found, {len(added)} new saved")
+            except Exception as e:
+                _log(f"HotPads FAILED: {e}")
+
         if source in ("fb", "all"):
             _log("Facebook: fetching (needs saved login in .fb_profile)...")
             try:
@@ -127,6 +141,7 @@ _CONTROLS = """
       <option value="apartments">Apartments.com</option>
       <option value="zillow">Zillow</option>
       <option value="rent">Rent.com</option>
+      <option value="hotpads">HotPads</option>
       <option value="facebook">Facebook</option>
     </select>
   </label>
@@ -147,6 +162,7 @@ _CONTROLS = """
   <button class="btn-refresh" id="r-apts" onclick="refresh('apts')">&#8635; Apartments.com</button>
   <button class="btn-refresh" id="r-zillow" onclick="refresh('zillow')">&#8635; Zillow</button>
   <button class="btn-refresh" id="r-rent" onclick="refresh('rent')">&#8635; Rent.com</button>
+  <button class="btn-refresh" id="r-hotpads" onclick="refresh('hotpads')">&#8635; HotPads</button>
   <button class="btn-refresh" id="r-fb"   onclick="refresh('fb')">&#8635; Facebook</button>
   <button class="btn-refresh" id="r-all"  onclick="refresh('all')">&#8635; All</button>
 </div>

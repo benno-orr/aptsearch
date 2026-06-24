@@ -5,6 +5,7 @@
 # browser profiles (per-user, large)
 .fb_profile/
 .zillow_profile/
+.hotpads_profile/
 
 # local DB cache + backups (shared DB lives in Turso)
 listings.db
