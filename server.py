@@ -50,6 +50,7 @@ def _run_refresh(source):
                 track._enrich(results)
                 track.backfill_listing_dates(conn, results)
                 added, skipped = track._save_listings(conn, results, "craigslist")
+                track.record_scrape(conn, "craigslist", len(results), len(added))
                 _log(f"Craigslist: {len(results)} found, {len(added)} new saved")
             except Exception as e:
                 _log(f"Craigslist FAILED: {e}")
@@ -61,6 +62,7 @@ def _run_refresh(source):
                 track._enrich(results)
                 track.backfill_listing_dates(conn, results)
                 added, skipped = track._save_listings(conn, results, "apartments")
+                track.record_scrape(conn, "apartments", len(results), len(added))
                 if not results:
                     _log("Apartments.com: 0 results — likely Akamai rate-limit; try later")
                 else:
@@ -75,6 +77,7 @@ def _run_refresh(source):
                 track._enrich(results)
                 track.backfill_listing_dates(conn, results)
                 added, skipped = track._save_listings(conn, results, "zillow")
+                track.record_scrape(conn, "zillow", len(results), len(added))
                 if not results:
                     _log("Zillow: 0 results — if bot-blocked, run "
                          "`python3 track.py fetch-zillow` in a terminal once to solve the captcha")
@@ -90,6 +93,7 @@ def _run_refresh(source):
                 track._enrich(results)
                 track.backfill_listing_dates(conn, results)
                 added, skipped = track._save_listings(conn, results, "rent")
+                track.record_scrape(conn, "rent", len(results), len(added))
                 _log(f"Rent.com: {len(results)} found, {len(added)} new saved")
             except Exception as e:
                 _log(f"Rent.com FAILED: {e}")
@@ -101,6 +105,7 @@ def _run_refresh(source):
                 track._enrich(results)
                 track.backfill_listing_dates(conn, results)
                 added, skipped = track._save_listings(conn, results, "hotpads")
+                track.record_scrape(conn, "hotpads", len(results), len(added))
                 if not results:
                     _log("HotPads: 0 results — if bot-blocked, run "
                          "`python3 track.py fetch-hotpads` in a terminal once to solve the captcha")
@@ -116,6 +121,7 @@ def _run_refresh(source):
                 track._enrich(results)
                 track.backfill_listing_dates(conn, results)
                 added, skipped = track._save_listings(conn, results, "facebook")
+                track.record_scrape(conn, "facebook", len(results), len(added))
                 if not results:
                     _log("Facebook: 0 results — if not logged in, run "
                          "`python3 track.py fetch-fb` once in a terminal")
@@ -162,7 +168,9 @@ _CONTROLS = """
   <label><input type="checkbox" id="f-house" onchange="applyFilters()"> house units only</label>
   <label><input type="checkbox" id="f-laundry" onchange="applyFilters()"> in-unit laundry only</label>
   <label><input type="checkbox" id="f-hidepassed" checked onchange="applyFilters()"> hide passed</label>
+  <label><input type="checkbox" id="f-hideremoved" checked onchange="applyFilters()"> hide removed</label>
   <span id="f-hidden-count" style="color:#999"></span>
+  <button class="btn-swipe" onclick="openSwipe()">▶ Swipe mode</button>
   <span class="spacer"></span>
   <button class="btn-refresh" id="r-cl"   onclick="refresh('cl')">&#8635; Craigslist</button>
   <button class="btn-refresh" id="r-apts" onclick="refresh('apts')">&#8635; Apartments.com</button>
@@ -173,7 +181,57 @@ _CONTROLS = """
   <button class="btn-refresh" id="r-all"  onclick="refresh('all')">&#8635; All</button>
 </div>
 <div id="refresh-log"></div>
+<style>
+.btn-swipe{background:#4f46e5;color:#fff;border:none;border-radius:8px;padding:6px 14px;font-size:0.9em;font-weight:600;cursor:pointer}
+.btn-swipe:hover{background:#4338ca}
+#swipe-overlay{display:none;position:fixed;inset:0;background:rgba(17,24,39,.92);z-index:1000;
+  flex-direction:column;align-items:center;justify-content:flex-start;padding:18px;overflow:auto}
+#swipe-overlay.open{display:flex}
+.swipe-top{display:flex;justify-content:space-between;align-items:center;width:100%;max-width:560px;color:#e5e7eb;margin-bottom:10px}
+.swipe-top .swipe-count{font-weight:700}
+.swipe-close{background:transparent;border:1px solid #6b7280;color:#e5e7eb;border-radius:6px;padding:4px 10px;cursor:pointer}
+#swipe-card{width:100%;max-width:560px;background:#fff;border-radius:14px;overflow:hidden;box-shadow:0 12px 40px rgba(0,0,0,.5)}
+#swipe-card .minimap{display:none}
+#swipe-card .actions,#swipe-card .ac-h{display:none}
+#swipe-card .amen-commute .ac-col:last-child{display:none}
+.swipe-btns{display:flex;gap:10px;width:100%;max-width:560px;margin-top:14px}
+.swipe-btns button{flex:1;border:none;border-radius:10px;padding:14px 0;font-size:1.05em;font-weight:700;cursor:pointer;color:#fff}
+.sb-no{background:#ef4444}.sb-no:hover{background:#dc2626}
+.sb-mid{background:#f59e0b}.sb-mid:hover{background:#d97706}
+.sb-nice{background:#16a34a}.sb-nice:hover{background:#15803d}
+.sb-skip{background:#6b7280}.sb-skip:hover{background:#4b5563;flex:0 0 90px}
+.swipe-hint{color:#9ca3af;font-size:0.8em;margin-top:10px;text-align:center}
+.swipe-cur{color:#fde68a;font-weight:700;margin-left:8px}
+</style>
+<div id="swipe-overlay">
+  <div class="swipe-top">
+    <span class="swipe-count" id="swipe-count"></span>
+    <button class="swipe-close" onclick="closeSwipe()">✕ close (Esc)</button>
+  </div>
+  <div id="swipe-card"></div>
+  <div class="swipe-btns">
+    <button class="sb-no"   onclick="swipeRate('no')">👎 No (←)</button>
+    <button class="sb-mid"  onclick="swipeRate('mid')">😐 Mid (↑)</button>
+    <button class="sb-nice" onclick="swipeRate('nice')">😍 Nice (→)</button>
+    <button class="sb-skip" onclick="swipeNext()">Skip (space)</button>
+  </div>
+  <div class="swipe-hint">← No&nbsp;&nbsp;↑ Mid&nbsp;&nbsp;→ Nice&nbsp;&nbsp;space Skip&nbsp;&nbsp;Esc Close</div>
+</div>
 <script>
+async function setRating(id, rating, reload) {
+  await fetch('/api/rate', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({id:id, rating:rating})});
+  // update underlying card in place (no reload needed)
+  const card = document.querySelector('.card[data-id="'+id+'"]');
+  if (card) {
+    card.dataset.rating = rating;
+    card.querySelectorAll('.rate').forEach(b => b.classList.remove('rated-on'));
+    const map = {no:'.rate-no', mid:'.rate-mid', nice:'.rate-nice'};
+    const btn = card.querySelector(map[rating]);
+    if (btn) btn.classList.add('rated-on');
+  }
+  if (reload) location.reload();
+}
 async function setStatus(id, status) {
   await fetch('/api/status', {method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({id:id, status:status})});
@@ -190,17 +248,20 @@ function applyFilters() {
   const houseOnly   = document.getElementById('f-house').checked;
   const laundryOnly = document.getElementById('f-laundry').checked;
   const hidePassed  = document.getElementById('f-hidepassed').checked;
+  const hideRemoved = document.getElementById('f-hideremoved').checked;
   const maxBike     = parseInt(document.getElementById('f-bike').value, 10);
   const source      = document.getElementById('f-source').value;
   let hiddenFar = 0;
   document.querySelectorAll('.card').forEach(c => {
     let show = true;
     const bike = parseInt(c.dataset.bike || '998', 10);
+    const removed = c.dataset.delisted === '1';
     // source filter takes precedence — when isolating one site, ignore the bike cap
     if (source !== 'all') {
-      c.style.display = (c.dataset.source === source) ? '' : 'none';
+      c.style.display = ((c.dataset.source === source) && !(hideRemoved && removed)) ? '' : 'none';
       return;
     }
+    if (hideRemoved && removed) show = false;
     // 998 = commute unknown — always shown; East Cambridge never distance-hidden
     if (bike !== 998 && bike > maxBike && !c.classList.contains('east-cam')) {
       show = false; hiddenFar++;
@@ -235,9 +296,100 @@ async function pollRefresh() {
     setTimeout(() => location.reload(), 1200);
   }
 }
+// ── Swipe mode: one listing at a time, rate with buttons or arrow keys ──
+let _swipe = [], _swipeIdx = 0;
+function openSwipe() {
+  applyFilters();
+  _swipe = Array.from(document.querySelectorAll('.card')).filter(c => c.offsetParent !== null);
+  if (!_swipe.length) { alert('No listings match the current filters.'); return; }
+  _swipeIdx = 0;
+  document.getElementById('swipe-overlay').classList.add('open');
+  swipeRender();
+}
+function closeSwipe() {
+  document.getElementById('swipe-overlay').classList.remove('open');
+}
+function swipeRender() {
+  const card = _swipe[_swipeIdx];
+  document.getElementById('swipe-card').innerHTML = card.outerHTML;
+  const rated = card.dataset.rating;
+  document.getElementById('swipe-count').innerHTML =
+    (_swipeIdx + 1) + ' / ' + _swipe.length +
+    (rated ? '<span class="swipe-cur">rated: ' + rated + '</span>' : '');
+}
+function swipeNext() {
+  if (_swipeIdx >= _swipe.length - 1) { closeSwipe(); return; }
+  _swipeIdx++; swipeRender();
+}
+async function swipeRate(rating) {
+  const card = _swipe[_swipeIdx];
+  if (card) await setRating(parseInt(card.dataset.id, 10), rating, false);
+  swipeNext();
+}
+document.addEventListener('keydown', function(e) {
+  if (!document.getElementById('swipe-overlay').classList.contains('open')) return;
+  if (e.key === 'Escape') { closeSwipe(); }
+  else if (e.key === 'ArrowLeft')  { swipeRate('no'); }
+  else if (e.key === 'ArrowUp')    { swipeRate('mid'); }
+  else if (e.key === 'ArrowRight') { swipeRate('nice'); }
+  else if (e.key === ' ')          { swipeNext(); }
+  else return;
+  e.preventDefault();
+});
 window.addEventListener('DOMContentLoaded', applyFilters);
 </script>
 """
+
+
+_SCRAPE_SOURCES = [
+    ("craigslist", "Craigslist"), ("apartments", "Apartments.com"),
+    ("zillow", "Zillow"), ("rent", "Rent.com"),
+    ("hotpads", "HotPads"), ("facebook", "Facebook"),
+]
+
+
+def _ago(ts):
+    """'2026-06-24 21:26' -> '5m ago' / '3h ago' / '2d ago'."""
+    if not ts:
+        return "never"
+    try:
+        dt = datetime.strptime(ts, "%Y-%m-%d %H:%M")
+    except ValueError:
+        return ts
+    secs = (datetime.now() - dt).total_seconds()
+    if secs < 90:
+        return "just now"
+    if secs < 3600:
+        return f"{int(secs // 60)}m ago"
+    if secs < 86400:
+        return f"{int(secs // 3600)}h ago"
+    return f"{int(secs // 86400)}d ago"
+
+
+def _scrape_status_html(conn):
+    runs = track.scrape_runs(conn)
+    chips = []
+    for src, label in _SCRAPE_SOURCES:
+        info = runs.get(src) or {}
+        ts = info.get("last_run")
+        title = ""
+        if info.get("last_error"):
+            title = f' title="last error: {info["last_error"]}"'
+        elif ts:
+            title = f' title="{ts} — {info.get("last_total", 0)} found, {info.get("last_new", 0)} new"'
+        cls = "scrape-chip" + (" scrape-stale" if not ts else "")
+        chips.append(f'<span class="{cls}"{title}><b>{label}</b> {_ago(ts)}</span>')
+    return (
+        "<style>"
+        ".scrape-status{margin:6px 0 2px;font-size:0.8em;color:#555;display:flex;"
+        "flex-wrap:wrap;gap:6px;align-items:center}"
+        ".scrape-label{font-weight:600;color:#374151}"
+        ".scrape-chip{background:#eef2ff;color:#3730a3;border-radius:8px;padding:2px 8px;white-space:nowrap}"
+        ".scrape-chip b{font-weight:600}"
+        ".scrape-stale{background:#f3f4f6;color:#9ca3af}"
+        "</style>"
+        '<div class="scrape-status"><span class="scrape-label">Last scraped:</span> '
+        + " ".join(chips) + "</div>")
 
 
 def build_page():
@@ -270,7 +422,7 @@ def build_page():
     )
     return track._HTML.format(
         date=datetime.now().strftime("%B %d, %Y %H:%M"),
-        search_summary=_CONTROLS,
+        search_summary=_CONTROLS + _scrape_status_html(conn),
         sections=sections,
         links=links,
         neighborhoods=hoods,
@@ -319,6 +471,17 @@ class Handler(BaseHTTPRequestHandler):
             conn.commit()
             self._send(200, '{"ok":true}', "application/json")
 
+        elif self.path == "/api/rate":
+            lid, rating = body.get("id"), body.get("rating")
+            if rating not in track.RATINGS and rating != "":
+                self._send(400, '{"error":"bad rating"}', "application/json")
+                return
+            conn = track.db_connect()
+            conn.execute("UPDATE listings SET rating=?, updated_on=? WHERE id=?",
+                         (rating, track.now(), lid))
+            conn.commit()
+            self._send(200, '{"ok":true}', "application/json")
+
         elif self.path == "/api/note":
             lid, text = body.get("id"), (body.get("text") or "").strip()
             if not text:
@@ -337,7 +500,7 @@ class Handler(BaseHTTPRequestHandler):
 
         elif self.path == "/api/refresh":
             source = body.get("source", "cl")
-            if source not in ("cl", "apts", "zillow", "fb", "all"):
+            if source not in ("cl", "apts", "zillow", "rent", "hotpads", "fb", "all"):
                 self._send(400, '{"error":"bad source"}', "application/json")
                 return
             with _refresh_lock:

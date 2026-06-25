@@ -323,7 +323,16 @@ h1{{font-size:1.6em;margin-bottom:4px}}
 .media-row{{display:flex;flex-direction:column;gap:6px}}
 .media-row .thumb-link{{display:block;width:100%;line-height:0}}
 .media-row .thumb{{width:100%;height:210px;object-fit:cover;border-radius:0}}
-.media-row .minimap{{width:100%;aspect-ratio:5/2;height:auto;margin:0;border-radius:0}}
+.delisted-banner{{background:#7f1d1d;color:#fff;font-size:0.7em;font-weight:700;text-transform:uppercase;letter-spacing:.05em;padding:4px 12px;text-align:center}}
+.card.delisted{{opacity:.55;filter:grayscale(.4)}}
+.walk-lbl{{background:rgba(255,255,255,.92);color:#15803d;font-size:11px;font-weight:700;
+  border:1px solid #16a34a;border-radius:9px;padding:0 5px;line-height:18px;text-align:center;white-space:nowrap;box-shadow:0 1px 2px rgba(0,0,0,.2)}}
+.media-split{{display:flex;gap:6px}}
+.media-split > *{{flex:1;min-width:0}}
+.media-row .minimap{{width:100%;height:180px;aspect-ratio:auto;margin:0;border-radius:0}}
+.media-row .sv-link{{display:block;width:100%;line-height:0;position:relative}}
+.media-row .streetview{{width:100%;height:180px;object-fit:cover;border-radius:0}}
+.sv-tag{{position:absolute;left:8px;bottom:8px;background:rgba(0,0,0,.6);color:#fff;font-size:0.66em;font-weight:700;padding:2px 7px;border-radius:6px;line-height:1.4}}
 .card{{background:#fff;border-radius:10px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08);border-left:4px solid #e5e7eb}}
 .card.interested{{border-left-color:#22c55e}}
 .card.applied{{border-left-color:#8b5cf6}}
@@ -362,6 +371,14 @@ h1{{font-size:1.6em;margin-bottom:4px}}
 .act-passed:hover{{background:#fee2e2;border-color:#ef4444}}
 .act-applied:hover{{background:#ede9fe;border-color:#8b5cf6}}
 .act-viewed:hover{{background:#fef3c7;border-color:#f59e0b}}
+.ac-h-rate{{margin-top:9px}}
+.rate-row{{flex-direction:row;flex-wrap:wrap}}
+.rate{{border:1px solid #d1d5db;background:#fff;border-radius:6px;padding:3px 8px;font-size:0.78em;cursor:pointer;color:#374151;white-space:nowrap}}
+.rate:hover{{background:#f3f4f6}}
+.rate-nice.rated-on{{background:#dcfce7;border-color:#16a34a;color:#166534;font-weight:700}}
+.rate-mid.rated-on{{background:#fef3c7;border-color:#f59e0b;color:#92400e;font-weight:700}}
+.rate-no.rated-on{{background:#fee2e2;border-color:#ef4444;color:#991b1b;font-weight:700}}
+.card[data-rating="nice"]{{box-shadow:0 0 0 2px #16a34a inset}}
 .controls{{background:#fff;border-radius:10px;padding:12px 16px;box-shadow:0 1px 4px rgba(0,0,0,.08);margin-bottom:20px;display:flex;flex-wrap:wrap;gap:14px;align-items:center;font-size:0.88em}}
 .controls label{{display:flex;align-items:center;gap:5px;cursor:pointer}}
 .controls .spacer{{flex:1}}
@@ -504,6 +521,15 @@ table.ss td.new-count{{font-weight:700;color:#166534}}
           L.polyline(shift(pts, k), {{color:color, weight:W, opacity:1}}).addTo(map);
       }}
       line(routes.walk, '#16a34a', 0);               // 🚶 green — walking route only
+      // annotate the walk time at the midpoint of the walking route
+      var walkMin = el.dataset.walk;
+      if (walkMin) {{
+        var wpts = (routes.walk && routes.walk.length > 1) ? routes.walk : [[lat, lon], BROAD];
+        var mid = wpts[Math.floor(wpts.length / 2)];
+        L.marker(mid, {{interactive:false, keyboard:false, icon: L.divIcon({{
+          className:'walk-lbl', iconSize:[64,20], iconAnchor:[32,10],
+          html:'\\uD83D\\uDEB6 ' + walkMin + ' min'}})}}).addTo(map);
+      }}
       el.title = approx ? 'Approximate location (geocoded from area)' : 'Exact location';
       el.addEventListener('click', function(){{
         window.open('https://www.openstreetmap.org/?mlat='+lat+'&mlon='+lon+'#map=16/'+lat+'/'+lon, '_blank');
@@ -625,7 +651,13 @@ _EXTRA_COLUMNS = [
     ("amenities",    "TEXT"),
     ("route_geo",    "TEXT"),
     ("listed_on",    "TEXT"),
+    ("rating",       "TEXT DEFAULT ''"),   # '', 'no', 'mid', 'nice' (user swipe rating)
+    ("delisted",     "INTEGER DEFAULT 0"), # 1 = removed by author / no longer available
+    ("delisted_on",  "TEXT"),              # date we detected the removal
 ]
+
+# Allowed user ratings, worst → best (also the swipe-left/up/right order).
+RATINGS = ["no", "mid", "nice"]
 
 
 def _db_init_schema(conn):
@@ -645,6 +677,13 @@ def _db_init_schema(conn):
         );
         CREATE UNIQUE INDEX IF NOT EXISTS idx_url ON listings(url);
         CREATE INDEX IF NOT EXISTS idx_fingerprint ON listings(fingerprint);
+        CREATE TABLE IF NOT EXISTS scrape_runs (
+            source      TEXT PRIMARY KEY,
+            last_run    TEXT NOT NULL,
+            last_total  INTEGER DEFAULT 0,
+            last_new    INTEGER DEFAULT 0,
+            last_error  TEXT DEFAULT ''
+        );
     """)
     conn.commit()
     # Only ALTER for columns that don't exist yet — avoids a flurry of failing
@@ -2261,6 +2300,14 @@ def _row_bike(r):
         return 998
 
 
+def row_rating(r):
+    """User rating ('no'/'mid'/'nice') or '' — safe across sqlite3.Row and _Row."""
+    try:
+        return r["rating"] or ""
+    except (KeyError, IndexError):
+        return ""
+
+
 def _row_sort_key(r):
     """Within a status section: East Cambridge first, then DISTANCE (bike time),
     then neighborhood score, house preference, laundry."""
@@ -2316,6 +2363,36 @@ def _row_image(r):
         return ""
 
 
+def _streetview_url(r, size="400x220"):
+    """Google Street View Static image URL for a listing, or '' if no key/location.
+    Uses exact lat/lon when available, else the address text. return_error_code
+    makes locations with no imagery 404 (we hide those client-side) instead of
+    serving Google's gray 'no imagery' placeholder."""
+    key = _google_key()
+    if not key:
+        return ""
+    if r["lat"] is not None and r["lon"] is not None:
+        loc = f'{r["lat"]},{r["lon"]}'
+    else:
+        loc = (r["location"] or "").strip()
+    if not loc:
+        return ""
+    params = urllib.parse.urlencode({
+        "size": size, "location": loc, "fov": 80, "source": "outdoor",
+        "return_error_code": "true", "key": key,
+    })
+    return "https://maps.googleapis.com/maps/api/streetview?" + params
+
+
+def _streetview_map_link(r):
+    """A google.com/maps link to the interactive Street View for the location."""
+    if r["lat"] is not None and r["lon"] is not None:
+        q = f'{r["lat"]},{r["lon"]}'
+    else:
+        q = (r["location"] or "").strip()
+    return "https://www.google.com/maps?q=&layer=c&cbll=" + urllib.parse.quote(q) if q else ""
+
+
 def _render_card(r, is_new_today=False, interactive=False):
     status     = r["status"]
     sc         = neighborhood_score(r["location"] or "")
@@ -2340,9 +2417,14 @@ def _render_card(r, is_new_today=False, interactive=False):
         except (KeyError, IndexError):
             rg = ""
         routes_attr = f" data-routes='{rg}'" if rg else ""
+        try:
+            walk_min = r["walk_min"]
+        except (KeyError, IndexError):
+            walk_min = None
+        walk_attr = f' data-walk="{walk_min}"' if walk_min is not None else ""
         minimap_html = (
             f'<div class="minimap" data-lat="{r["lat"]}" data-lon="{r["lon"]}" '
-            f'data-approx="{approx}"{routes_attr}></div>'
+            f'data-approx="{approx}"{walk_attr}{routes_attr}></div>'
         )
     else:
         minimap_html = ""
@@ -2375,9 +2457,23 @@ def _render_card(r, is_new_today=False, interactive=False):
         f'onerror="this.closest(&quot;.card&quot;).classList.add(&quot;no-img&quot;)"></a>'
         if img else ""
     )
+    sv_url  = _streetview_url(r)
+    sv_link = _streetview_map_link(r)
+    sv_cell = (
+        f'<a href="{sv_link}" target="_blank" class="sv-link" title="Open Street View">'
+        f'<img class="streetview" src="{sv_url}" loading="lazy" alt="Street View" '
+        f'onerror="this.closest(&quot;.sv-link&quot;).style.display=&quot;none&quot;">'
+        f'<span class="sv-tag">&#128247; Street View</span></a>'
+        if sv_url else ""
+    )
+    # Street View + minimap share a horizontal split; listing photo sits on top.
+    split_html = (
+        f'<div class="media-split">{sv_cell}{minimap_html}</div>'
+        if (sv_cell or minimap_html) else ""
+    )
     media_row = (
-        f'<div class="media-row">{img_cell}{minimap_html}</div>'
-        if (img_cell or minimap_html) else ""
+        f'<div class="media-row">{img_cell}{split_html}</div>'
+        if (img_cell or split_html) else ""
     )
     new_badge = '<span class="banner-new">&#9733; NEW</span>' if is_new_today else ""
     try:
@@ -2392,9 +2488,18 @@ def _render_card(r, is_new_today=False, interactive=False):
         f'{new_badge}</div>'
     )
     laundry_cls = " has-laundry" if row_has_laundry(r) else ""
+    try:
+        is_delisted = bool(r["delisted"])
+    except (KeyError, IndexError):
+        is_delisted = False
+    delisted_cls = " delisted" if is_delisted else ""
+    delisted_banner = '<div class="delisted-banner">&#9888; REMOVED BY AUTHOR</div>' if is_delisted else ""
+    rating = row_rating(r)
     actions_col = ""
     if interactive:
         rid = r["id"]
+        def _ron(val):  # mark the currently-selected rating button
+            return " rated-on" if rating == val else ""
         actions_col = (
             f'<div class="ac-col"><div class="ac-h">Status</div>'
             f'<div class="actions">'
@@ -2403,6 +2508,12 @@ def _render_card(r, is_new_today=False, interactive=False):
             f'<button class="act act-applied" onclick="setStatus({rid},\'applied\')">✓ applied</button>'
             f'<button class="act act-passed" onclick="setStatus({rid},\'passed\')">✗ pass</button>'
             f'<button class="act" onclick="addNote({rid})">+ note</button>'
+            f'</div>'
+            f'<div class="ac-h ac-h-rate">Rating</div>'
+            f'<div class="actions rate-row">'
+            f'<button class="rate rate-nice{_ron("nice")}" onclick="setRating({rid},\'nice\')">😍 nice</button>'
+            f'<button class="rate rate-mid{_ron("mid")}" onclick="setRating({rid},\'mid\')">😐 mid</button>'
+            f'<button class="rate rate-no{_ron("no")}" onclick="setRating({rid},\'no\')">👎 no</button>'
             f'</div></div>'
         )
     amen_commute_html = (
@@ -2411,7 +2522,8 @@ def _render_card(r, is_new_today=False, interactive=False):
         f'{commute_block}{actions_col}</div>'
     )
     return (
-        f'<div class="card {status}{house_cls}{laundry_cls}{ec_cls}" data-id="{r["id"]}" data-bike="{_row_bike(r)}" data-source="{src}">'
+        f'<div class="card {status}{house_cls}{laundry_cls}{ec_cls}{delisted_cls}" data-id="{r["id"]}" data-bike="{_row_bike(r)}" data-source="{src}" data-rating="{rating}" data-delisted="{1 if is_delisted else 0}">'
+        f'{delisted_banner}'
         f'{banner_html}'
         f'{media_row}'
         f'{addr_html}'
@@ -2773,6 +2885,108 @@ def backfill_listing_dates(conn, results):
     return n
 
 
+_REMOVED_PHRASES = re.compile(
+    r"(this posting has (been )?(deleted|expired|removed)|posting has been flagged|"
+    r"no longer available|listing (is )?(no longer|has been removed|not available)|"
+    r"this home is no longer|is no longer (available|active)|"
+    r"page (not found|isn'?t available)|we can'?t find (this|that) (page|listing))",
+    re.IGNORECASE,
+)
+_BLOCKED_PHRASES = re.compile(
+    r"(access to this page has been denied|access denied|pardon our interruption|"
+    r"px-captcha|are you a human|verify you are|unusual traffic|please enable javascript)",
+    re.IGNORECASE,
+)
+
+
+def check_listing_removed(url):
+    """Has this listing been taken down? Returns True (removed), False (live), or
+    None (couldn't tell — bot-blocked, network error, or login wall). Conservative
+    on purpose: only returns True on a clear 404/410 or an explicit removal phrase,
+    so a bot-block is never mistaken for a removal."""
+    headers = {"User-Agent": ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+               "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"),
+               "Accept-Language": "en-US,en;q=0.9", "Accept-Encoding": "gzip, deflate"}
+    try:
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            raw = resp.read()
+            final_url = resp.geturl()
+            if resp.headers.get("Content-Encoding", "") == "gzip":
+                raw = gzip.decompress(raw)
+            html = raw.decode("utf-8", "replace")
+    except urllib.error.HTTPError as e:
+        return True if e.code in (404, 410) else None   # 404/410 = gone; others unknown
+    except Exception:
+        return None
+    if _BLOCKED_PHRASES.search(html[:6000]):
+        return None                                     # bot wall — can't tell
+    if _REMOVED_PHRASES.search(html):
+        return True
+    # Craigslist: a deleted post redirects to the search page or a removal notice
+    if "craigslist.org" in url and "/search/" in final_url:
+        return True
+    return False
+
+
+def mark_delisted(conn, listing_id, removed):
+    """Set/clear the delisted flag for a listing."""
+    if removed:
+        conn.execute("UPDATE listings SET delisted=1, delisted_on=?, updated_on=? WHERE id=?",
+                     (now(), now(), listing_id))
+    else:
+        conn.execute("UPDATE listings SET delisted=0, delisted_on='' WHERE id=?", (listing_id,))
+    conn.commit()
+
+
+def prune_removed(conn, log=print, only_active=True):
+    """Check live listings' URLs and flag the ones taken down. Returns
+    (checked, newly_removed). Skips already-delisted rows and bot-blocked /
+    ambiguous responses (those stay as-is)."""
+    where = "WHERE COALESCE(delisted,0)=0" if only_active else ""
+    rows = conn.execute(f"SELECT id, url, source FROM listings {where}").fetchall()
+    checked = removed = 0
+    for r in rows:
+        verdict = check_listing_removed(r["url"])
+        checked += 1
+        if verdict is True:
+            mark_delisted(conn, r["id"], True)
+            removed += 1
+            log(f"  removed: #{r['id']} {r['url']}")
+    log(f"  checked {checked}, newly flagged removed: {removed}")
+    return checked, removed
+
+
+def record_scrape(conn, source, total=0, new=0, error=""):
+    """Stamp the time a source was last scraped (whether or not it found
+    anything), so the UI can show 'last scraped' per site."""
+    try:
+        conn.execute(
+            "INSERT INTO scrape_runs (source, last_run, last_total, last_new, last_error) "
+            "VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(source) DO UPDATE SET "
+            "last_run=excluded.last_run, last_total=excluded.last_total, "
+            "last_new=excluded.last_new, last_error=excluded.last_error",
+            (source, now(), int(total or 0), int(new or 0), error or ""),
+        )
+        conn.commit()
+    except Exception:
+        pass
+
+
+def scrape_runs(conn):
+    """{source: {last_run, last_total, last_new, last_error}} for display."""
+    try:
+        rows = conn.execute(
+            "SELECT source, last_run, last_total, last_new, last_error FROM scrape_runs"
+        ).fetchall()
+    except Exception:
+        return {}
+    return {r["source"]: {"last_run": r["last_run"], "last_total": r["last_total"],
+                          "last_new": r["last_new"], "last_error": r["last_error"]}
+            for r in rows}
+
+
 def cmd_fetch_cl(args):
     print(f"Fetching Craigslist (house/duplex/townhouse types)...\n")
     results = scrape_craigslist()
@@ -2793,6 +3007,7 @@ def cmd_fetch_cl(args):
         dup, _ = is_duplicate(conn, r["url"], fp)
         (seen if dup else new).append(r)
 
+    record_scrape(conn, "craigslist", len(results), len(new))
     _print_fetched(new, f"NEW listings ({len(new)} of {len(results)}, {len(seen)} already in DB):")
     if not new:
         print("  Nothing new since last update.")
@@ -2824,6 +3039,7 @@ def cmd_fetch_apts(args):
         dup, _ = is_duplicate(conn, r["url"], fp)
         (seen if dup else new).append(r)
 
+    record_scrape(conn, "apartments", len(results), len(new))
     _print_fetched(new, f"NEW Apartments.com listings ({len(new)} of {len(results)}, {len(seen)} already in DB):")
 
     if new:
@@ -2859,6 +3075,7 @@ def cmd_fetch_zillow(args):
         dup, _dupid = is_duplicate(conn, r["url"], fp)
         (seen if dup else new).append(r)
 
+    record_scrape(conn, "zillow", len(results), len(new))
     _print_fetched(new, f"NEW Zillow listings ({len(new)} of {len(results)}, {len(seen)} already in DB):")
 
     if new:
@@ -2895,6 +3112,7 @@ def cmd_fetch_hotpads(args):
         dup, _dupid = is_duplicate(conn, r["url"], fp)
         (seen if dup else new).append(r)
 
+    record_scrape(conn, "hotpads", len(results), len(new))
     _print_fetched(new, f"NEW HotPads listings ({len(new)} of {len(results)}, {len(seen)} already in DB):")
 
     if new:
@@ -2927,6 +3145,7 @@ def cmd_fetch_rent(args):
         dup, _dupid = is_duplicate(conn, r["url"], fp)
         (seen if dup else new).append(r)
 
+    record_scrape(conn, "rent", len(results), len(new))
     _print_fetched(new, f"NEW Rent.com listings ({len(new)} of {len(results)}, {len(seen)} already in DB):")
 
     if new:
@@ -2962,6 +3181,7 @@ def cmd_fetch_fb(args):
         dup, _ = is_duplicate(conn, r["url"], fp)
         (seen if dup else new).append(r)
 
+    record_scrape(conn, "facebook", len(results), len(new))
     _print_fetched(new, f"NEW FB listings ({len(new)} of {len(results)}, {len(seen)} already in DB):")
 
     if new:
@@ -3033,6 +3253,15 @@ def _build_summary_html(runs):
         f'</table>'
         f'</div>'
     )
+
+
+def cmd_prune(args):
+    """Check listing URLs and flag the ones removed by the author (hidden in UI)."""
+    conn = db_connect()
+    print("Checking listings for removals (this hits each URL)...")
+    checked, removed = prune_removed(conn, log=print)
+    total_removed = conn.execute("SELECT COUNT(*) FROM listings WHERE delisted=1").fetchone()[0]
+    print(f"\nDone. {removed} newly removed; {total_removed} total flagged as removed.")
 
 
 def cmd_daily(args):
@@ -3167,6 +3396,21 @@ def cmd_daily(args):
         except Exception as e:
             runs.append({"label": "Facebook Marketplace", "url": FB_SEARCH_URL, "total": 0, "new_count": 0, "error": str(e)})
             print(f"     failed: {e}")
+
+    # ── Stamp each source's last-scrape time (derived from the runs above) ──
+    for run in runs:
+        label = run["label"].lower()
+        src = next((s for s in ("craigslist", "apartments", "zillow", "rent", "hotpads", "facebook")
+                    if s in label or (s == "facebook" and "facebook" in label)), None)
+        if src:
+            record_scrape(conn, src, run.get("total", 0), run.get("new_count", 0), run.get("error", ""))
+
+    # ── Flag listings removed by their author (hidden in the UI) ──
+    print("Checking for removed listings...")
+    try:
+        prune_removed(conn, log=lambda m: print(f"     {m}"))
+    except Exception as e:
+        print(f"     removal check failed: {e}")
 
     # ── Commute times for new listings ──
     try:
@@ -3314,6 +3558,7 @@ def main():
     sub.add_parser("fetch-zillow")
     sub.add_parser("fetch-rent")
     sub.add_parser("fetch-hotpads")
+    sub.add_parser("prune")
     sub.add_parser("update")
     sub.add_parser("html")
     sub.add_parser("daily").add_argument("--skip-fb", action="store_true",
@@ -3356,6 +3601,7 @@ def main():
         "fetch-zillow": cmd_fetch_zillow,
         "fetch-rent": cmd_fetch_rent,
         "fetch-hotpads": cmd_fetch_hotpads,
+        "prune":      cmd_prune,
         "update":     cmd_update,
         "html":       cmd_html,
         "daily":      cmd_daily,

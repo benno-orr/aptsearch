@@ -23,3 +23,6 @@ htmls/
 
 # macOS
 .DS_Store
+
+# launchd daily-scrape logs
+logs/
