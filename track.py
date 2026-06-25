@@ -391,6 +391,7 @@ h1{{font-size:1.6em;margin-bottom:4px}}
 .banner-new{{color:#166534;background:#dcfce7;padding:0 7px;border-radius:6px;margin-left:auto}}
 .addr-price{{color:#111;font-weight:800}}
 .addr-loc{{color:#444}}
+.addr-specs{{color:#1d4ed8;font-weight:600}}
 .addr-avail{{color:#6b21a8;font-weight:700}}
 .src{{display:inline-block;padding:1px 6px;border-radius:8px;font-size:0.68em;font-weight:600;margin-left:4px;vertical-align:middle;text-transform:uppercase}}
 .src-craigslist{{background:#fff3cd;color:#856404}}
@@ -654,6 +655,9 @@ _EXTRA_COLUMNS = [
     ("rating",       "TEXT DEFAULT ''"),   # '', 'no', 'mid', 'nice' (user swipe rating)
     ("delisted",     "INTEGER DEFAULT 0"), # 1 = removed by author / no longer available
     ("delisted_on",  "TEXT"),              # date we detected the removal
+    ("beds",         "REAL"),              # bedrooms (from listing detail page)
+    ("baths",        "REAL"),              # bathrooms
+    ("sqft",         "INTEGER"),           # square feet
 ]
 
 # Allowed user ratings, worst → best (also the swipe-left/up/right order).
@@ -1153,6 +1157,85 @@ async def _scrape_apts_pw():
             continue
         unique.append(r)
     return unique
+
+
+def _apts_detail_parse(html):
+    """Pull beds/baths/sqft/availability from an Apartments.com listing detail
+    page. The unit facts live in repeated
+    <p class="rentInfoLabel">X</p><p class="rentInfoDetail">Y</p> pairs."""
+    pairs = {k.strip(): v.strip() for k, v in re.findall(
+        r'rentInfoLabel">([^<]+)</p>\s*<p class="rentInfoDetail">([^<]*)</p>', html)}
+
+    def _num(s):
+        m = re.search(r'[\d.]+', s or "")
+        return float(m.group(0)) if m else None
+
+    sqm = re.search(r'([\d,]+)\s*sq', pairs.get("Square Feet", ""))
+    return {
+        "beds":  _num(pairs.get("Bedrooms")),
+        "baths": _num(pairs.get("Bathrooms")),
+        "sqft":  int(sqm.group(1).replace(",", "")) if sqm else None,
+        "avail": parse_move_in(pairs.get("Available", "")),
+    }
+
+
+async def _enrich_apts_details_pw(urls, log=print):
+    """Headed-fetch each Apartments.com detail page and return {url: {beds, baths,
+    sqft, avail}}. Akamai allows sequential navigations in one browser if paced,
+    so we reuse a single window. Blocked/failed pages are skipped (not in result)."""
+    from playwright.async_api import async_playwright
+    out = {}
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(
+            headless=False, args=["--disable-blink-features=AutomationControlled"])
+        page = await browser.new_page(viewport={"width": 1280, "height": 900})
+        try:
+            for i, u in enumerate(urls):
+                try:
+                    await page.goto(u, wait_until="domcontentloaded", timeout=40000)
+                    await page.wait_for_timeout(2500)
+                    if "access denied" in (await page.title()).lower():
+                        log(f"  [{i+1}/{len(urls)}] blocked — backing off")
+                        await page.wait_for_timeout(4000)
+                        continue
+                    info = _apts_detail_parse(await page.content())
+                    if info["beds"] is not None or info["sqft"] is not None or info["avail"]:
+                        out[u] = info
+                        log(f"  [{i+1}/{len(urls)}] beds={info['beds']} baths={info['baths']} "
+                            f"sqft={info['sqft']} avail={info['avail'] or '—'}")
+                except Exception as e:
+                    log(f"  [{i+1}/{len(urls)}] error: {e}")
+                await page.wait_for_timeout(1200)
+        finally:
+            await browser.close()
+    return out
+
+
+def enrich_apts_details(conn, log=print, only_missing=True):
+    """Fill beds/baths/sqft (and move-in) for Apartments.com listings from their
+    detail pages. Returns the number of rows updated."""
+    where = "AND sqft IS NULL" if only_missing else ""
+    rows = conn.execute(
+        f"SELECT id, url FROM listings WHERE source='apartments' "
+        f"AND COALESCE(delisted,0)=0 {where}").fetchall()
+    if not rows:
+        log("  no Apartments.com listings need detail enrichment")
+        return 0
+    log(f"  fetching detail pages for {len(rows)} Apartments.com listing(s)...")
+    data = asyncio.run(_enrich_apts_details_pw([r["url"] for r in rows], log=log))
+    n = 0
+    for r in rows:
+        d = data.get(r["url"])
+        if not d:
+            continue
+        conn.execute(
+            "UPDATE listings SET beds=?, baths=?, sqft=?, "
+            "available=COALESCE(NULLIF(?,''), available), updated_on=? WHERE id=?",
+            (d["beds"], d["baths"], d["sqft"], d["avail"] or "", now(), r["id"]))
+        n += 1
+    conn.commit()
+    log(f"  updated {n} listing(s) with beds/baths/sqft")
+    return n
 
 
 # ── Zillow scraper ────────────────────────────────────────────────────────────
@@ -2308,6 +2391,24 @@ def row_rating(r):
         return ""
 
 
+def row_specs(r):
+    """Compact 'beds/baths/sqft' string from detail-page data, or '' if none."""
+    def _g(k):
+        try:
+            return r[k]
+        except (KeyError, IndexError):
+            return None
+    bits = []
+    beds, baths, sqft = _g("beds"), _g("baths"), _g("sqft")
+    if beds is not None:
+        bits.append(f"{beds:g} bd")
+    if baths is not None:
+        bits.append(f"{baths:g} ba")
+    if sqft:
+        bits.append(f"{sqft:,} ft&sup2;")
+    return " · ".join(bits)
+
+
 def _row_sort_key(r):
     """Within a status section: East Cambridge first, then DISTANCE (bike time),
     then neighborhood score, house preference, laundry."""
@@ -2440,6 +2541,9 @@ def _render_card(r, is_new_today=False, interactive=False):
     addr       = re.sub(r'\s*\b\d{5}(?:-\d{4})?\b\s*$', '', addr).strip().rstrip(",").strip()
     addr       = re.sub(r',?\s*\b(MA|Mass|Massachusetts)\b\s*$', '', addr, flags=re.I).strip().rstrip(",").strip()
     addr_bits  = [f'<span class="addr-price">{price_str}</span>']
+    specs      = row_specs(r)
+    if specs:
+        addr_bits.append(f'<span class="addr-specs">{specs}</span>')
     if addr:
         addr_bits.append(f'<span class="addr-loc">{addr}</span>')
     if avail:
@@ -3255,6 +3359,16 @@ def _build_summary_html(runs):
     )
 
 
+def cmd_enrich_apts(args):
+    """Fetch Apartments.com detail pages to fill beds/baths/sqft/move-in."""
+    if not _has_playwright():
+        print("Playwright is required. Install: pip install playwright && playwright install chromium")
+        sys.exit(1)
+    conn = db_connect()
+    print("Enriching Apartments.com listings from detail pages (opens a browser)...")
+    enrich_apts_details(conn, log=print, only_missing=not getattr(args, "all", False))
+
+
 def cmd_prune(args):
     """Check listing URLs and flag the ones removed by the author (hidden in UI)."""
     conn = db_connect()
@@ -3404,6 +3518,13 @@ def cmd_daily(args):
                     if s in label or (s == "facebook" and "facebook" in label)), None)
         if src:
             record_scrape(conn, src, run.get("total", 0), run.get("new_count", 0), run.get("error", ""))
+
+    # ── Enrich Apartments.com listings with detail-page beds/baths/sqft ──
+    print("Enriching Apartments.com detail data...")
+    try:
+        enrich_apts_details(conn, log=lambda m: print(f"     {m}"))
+    except Exception as e:
+        print(f"     apts detail enrichment failed: {e}")
 
     # ── Flag listings removed by their author (hidden in the UI) ──
     print("Checking for removed listings...")
@@ -3558,6 +3679,8 @@ def main():
     sub.add_parser("fetch-zillow")
     sub.add_parser("fetch-rent")
     sub.add_parser("fetch-hotpads")
+    sub.add_parser("enrich-apts").add_argument("--all", action="store_true",
+                                               help="re-fetch all (default: only rows missing sqft)")
     sub.add_parser("prune")
     sub.add_parser("update")
     sub.add_parser("html")
@@ -3601,6 +3724,7 @@ def main():
         "fetch-zillow": cmd_fetch_zillow,
         "fetch-rent": cmd_fetch_rent,
         "fetch-hotpads": cmd_fetch_hotpads,
+        "enrich-apts": cmd_enrich_apts,
         "prune":      cmd_prune,
         "update":     cmd_update,
         "html":       cmd_html,
