@@ -1189,15 +1189,22 @@ async def _enrich_apts_details_pw(urls, log=print):
         browser = await p.chromium.launch(
             headless=False, args=["--disable-blink-features=AutomationControlled"])
         page = await browser.new_page(viewport={"width": 1280, "height": 900})
+        consecutive_blocks = 0
         try:
             for i, u in enumerate(urls):
                 try:
                     await page.goto(u, wait_until="domcontentloaded", timeout=40000)
                     await page.wait_for_timeout(2500)
                     if "access denied" in (await page.title()).lower():
-                        log(f"  [{i+1}/{len(urls)}] blocked — backing off")
+                        consecutive_blocks += 1
+                        log(f"  [{i+1}/{len(urls)}] blocked ({consecutive_blocks})")
+                        if consecutive_blocks >= 5:
+                            log(f"  Akamai throttling — stopping after {len(out)} enriched; "
+                                f"re-run later to finish the rest.")
+                            break
                         await page.wait_for_timeout(4000)
                         continue
+                    consecutive_blocks = 0
                     info = _apts_detail_parse(await page.content())
                     if info["beds"] is not None or info["sqft"] is not None or info["avail"]:
                         out[u] = info
