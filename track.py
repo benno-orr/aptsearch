@@ -2416,15 +2416,38 @@ def row_specs(r):
     return " · ".join(bits)
 
 
+def _row_walk(r):
+    try:
+        w = r["walk_min"]
+        return w if w is not None else 998
+    except (KeyError, IndexError):
+        return 998
+
+
+def _row_date_key(r):
+    """Listing date (listed_on, else first-seen added_on) as a YYYYMMDD int,
+    negated so the newest sorts first; 0 (no date) sorts last."""
+    try:
+        d = r["listed_on"]
+    except (KeyError, IndexError):
+        d = None
+    if not d:
+        try:
+            d = r["added_on"]
+        except (KeyError, IndexError):
+            d = None
+    m = re.match(r'(\d{4})-(\d{2})-(\d{2})', d or "")
+    return -int(m.group(1) + m.group(2) + m.group(3)) if m else 0
+
+
 def _row_sort_key(r):
-    """Within a status section: East Cambridge first, then DISTANCE (bike time),
-    then neighborhood score, house preference, laundry."""
+    """Within a status section: newest listing date first, then shortest walk
+    time, then a few stable tiebreakers (East Cambridge, bike time, id)."""
     return (
+        _row_date_key(r),     # newest listed/first-seen first
+        _row_walk(r),         # shortest walk to Broad first
         -row_is_east_cam(r),
         _row_bike(r),
-        -neighborhood_score(r["location"] or ""),
-        -row_is_house(r),
-        -row_has_laundry(r),
         r["id"],
     )
 
@@ -3387,6 +3410,11 @@ def cmd_prune(args):
 
 def cmd_daily(args):
     """Run all scrapers, save a dated HTML summary to ~/Desktop."""
+    if getattr(args, "if_stale", False):
+        last = (db_connect().execute("SELECT MAX(last_run) FROM scrape_runs").fetchone()[0] or "")
+        if last[:10] == now()[:10]:
+            print(f"Already scraped today ({last}). Skipping (--if-stale).")
+            return
     if not _has_playwright():
         print("Playwright is required for daily scraping.")
         print("Install: pip install playwright && playwright install chromium")
@@ -3691,8 +3719,11 @@ def main():
     sub.add_parser("prune")
     sub.add_parser("update")
     sub.add_parser("html")
-    sub.add_parser("daily").add_argument("--skip-fb", action="store_true",
-                                         help="skip Facebook Marketplace (needs interactive login)")
+    _daily = sub.add_parser("daily")
+    _daily.add_argument("--skip-fb", action="store_true",
+                        help="skip Facebook Marketplace (needs interactive login)")
+    _daily.add_argument("--if-stale", dest="if_stale", action="store_true",
+                        help="skip if a scrape already ran today (for the login-triggered job)")
     sub.add_parser("commute").add_argument("--all", action="store_true",
                                            help="recompute all (default: only missing)")
 
