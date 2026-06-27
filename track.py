@@ -555,7 +555,7 @@ table.ss td.new-count{{font-weight:700;color:#166534}}
       var routes = {{}};
       try {{ routes = JSON.parse(el.dataset.routes || '{{}}'); }} catch (e) {{}}
       // Fit first so projection is valid, then draw.
-      map.fitBounds([[lat, lon], BROAD], {{paddingTopLeft:[48, 56], paddingBottomRight:[48, 48], maxZoom:18}});
+      map.fitBounds([[lat, lon], BROAD], {{paddingTopLeft:[20, 28], paddingBottomRight:[20, 20], maxZoom:18}});
       // Same-width solid lines. Each is rigidly shifted by a few pixels
       // perpendicular to the listing→Broad direction, so shared-street routes
       // run parallel with a little whitespace. A uniform shift can't self-
@@ -2394,11 +2394,13 @@ def row_commute_col(r):
         bus = None
     approx = "~" if src != "addr" else ""
     items = [("&#128694;", w, "cm-walk"), ("&#128692;", b, "cm-bike")]   # 🚶 / 🚴 — green
-    # only the faster public-transit option (subway vs bus), in purple
+    # only the faster public-transit option (subway vs bus), in purple — and only
+    # when it differs from the walk time
     cands = [(x, e) for x, e in ((t, "&#128647;"), (bus, "&#128652;")) if x is not None]
     if cands:
         tm, te = min(cands, key=lambda x: x[0])
-        items.append((te, tm, "cm-transit"))                            # 🚇/🚌 — purple
+        if tm != w:
+            items.append((te, tm, "cm-transit"))                        # 🚇/🚌 — purple
     rows = "".join(
         f'<div class="cm {cls}"><span class="cm-ico">{ic}</span>{approx}{m}m</div>'
         for ic, m, cls in items

@@ -424,7 +424,7 @@ function swipeMap(m) {
   const BROAD = [42.36266, -71.08644];
   L.marker([m.lat, m.lon]).addTo(map);
   L.marker(BROAD).bindTooltip('Broad').addTo(map);
-  map.fitBounds([[m.lat, m.lon], BROAD], {padding:[40,40], maxZoom:16});
+  map.fitBounds([[m.lat, m.lon], BROAD], {padding:[18,18], maxZoom:17});
   const R = m.routes || {};
   function line(pts, c) { if (pts && pts.length>1) L.polyline(pts, {color:c, weight:3}).addTo(map); }
   function transit(segs, c) { if (!segs||!segs.length) return; if (Array.isArray(segs[0])) line(segs,c); else segs.forEach(s=>line(s.pts,c)); }
