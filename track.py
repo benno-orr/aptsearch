@@ -2966,7 +2966,7 @@ def _render_card(r, is_new_today=False, interactive=False, units=None):
         f'data-baths="{_row_get(r, "baths") if _row_get(r, "baths") is not None else ""}" '
         f'data-sqft="{_row_get(r, "sqft") or ""}" '
         f'data-amen="{amen_yes}" data-dup="{1 if is_dup else 0}" '
-        f'data-movein="{movein_iso(avail)}"'
+        f'data-movein="{movein_iso(avail)}" data-added="{banner_date}"'
     )
     return (
         f'<div class="card {status}{house_cls}{laundry_cls}{ec_cls}{delisted_cls}{dup_cls}" {data_attrs}>'

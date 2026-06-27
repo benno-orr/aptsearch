@@ -148,6 +148,11 @@ _CONTROLS = """
   <div class="filters-dd">
     <button class="btn-filters" onclick="toggleFilters()">⚙ Filters ▾</button>
     <div class="filters-panel" id="filters-panel">
+      <div class="fp-row"><label>sort by</label>
+        <select id="f-sort" onchange="applyFilters()">
+          <option value="distance">distance</option>
+          <option value="added">date added</option>
+        </select></div>
       <div class="fp-row"><label>source</label>
         <select id="f-source" onchange="applyFilters()">
           <option value="all" selected>all</option>
@@ -163,7 +168,11 @@ _CONTROLS = """
         <input type="number" id="f-pmax" placeholder="max" oninput="applyFilters()" style="width:78px"></div>
       <div class="fp-row"><label>min sqft</label>
         <input type="number" id="f-sqft" placeholder="any" oninput="applyFilters()" style="width:78px"></div>
-      <div class="fp-row"><label>move-in by</label>
+      <div class="fp-row"><label>move-in</label>
+        <select id="f-movein-mode" onchange="applyFilters()">
+          <option value="by">by</option>
+          <option value="on">on</option>
+        </select>
         <input type="date" id="f-movein" onchange="applyFilters()"></div>
       <div class="fp-row"><label>baths</label>
         <select id="f-baths" onchange="applyFilters()">
@@ -191,6 +200,10 @@ _CONTROLS = """
         <label class="cbx"><input type="checkbox" id="f-hidepassed" checked onchange="applyFilters()"> hide passed</label>
         <label class="cbx"><input type="checkbox" id="f-hideremoved" checked onchange="applyFilters()"> hide removed</label>
         <label class="cbx"><input type="checkbox" id="f-hidedup" checked onchange="applyFilters()"> hide duplicates</label></div>
+      <div class="fp-row fp-apply">
+        <button class="btn-apply" onclick="applyFilters(); toggleFilters()">Apply</button>
+        <button class="btn-clear" onclick="clearFilters()">Clear</button>
+      </div>
     </div>
   </div>
   <input type="checkbox" id="f-laundry" style="display:none">
@@ -218,7 +231,12 @@ _CONTROLS = """
 .fp-row:last-child{border-bottom:none}
 .fp-row>label:first-child{width:74px;font-size:0.8em;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.03em}
 .fp-row .cbx{display:inline-flex;align-items:center;gap:3px;font-size:0.9em;font-weight:500;cursor:pointer;width:auto;text-transform:none;letter-spacing:0;color:#374151}
-.fp-row input[type=number],.fp-row select{border:1px solid #d1d5db;border-radius:6px;padding:3px 6px;font-size:0.85em}
+.fp-row input[type=number],.fp-row input[type=date],.fp-row select{border:1px solid #d1d5db;border-radius:6px;padding:3px 6px;font-size:0.85em}
+.fp-apply{justify-content:flex-end;gap:8px;border-bottom:none;padding-top:10px}
+.btn-apply{background:#4f46e5;color:#fff;border:none;border-radius:8px;padding:6px 18px;font-weight:600;cursor:pointer}
+.btn-apply:hover{background:#4338ca}
+.btn-clear{background:#fff;border:1px solid #d1d5db;border-radius:8px;padding:6px 12px;cursor:pointer}
+.btn-clear:hover{background:#f3f4f6}
 #swipe-overlay{display:none;position:fixed;inset:0;background:rgba(17,24,39,.92);z-index:1000;
   flex-direction:column;align-items:center;justify-content:flex-start;padding:18px;overflow:auto}
 #swipe-overlay.open{display:flex}
@@ -303,6 +321,18 @@ async function passHide(id, status) {
 function toggleFilters() {
   document.getElementById('filters-panel').classList.toggle('open');
 }
+function clearFilters() {
+  document.getElementById('f-source').value = 'all';
+  ['f-pmin','f-pmax','f-sqft','f-movein'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('f-baths').value = '0';
+  document.getElementById('f-bike').value = '15';
+  document.getElementById('f-movein-mode').value = 'by';
+  document.getElementById('f-sort').value = 'distance';
+  document.querySelectorAll('.f-rate, .f-amen').forEach(b => b.checked = false);
+  document.getElementById('f-house').checked = false;
+  ['f-hidepassed','f-hideremoved','f-hidedup'].forEach(id => document.getElementById(id).checked = true);
+  applyFilters();
+}
 const _val = id => document.getElementById(id).value;
 const _checked = sel => Array.from(document.querySelectorAll(sel)).filter(b=>b.checked).map(b=>b.value);
 function applyFilters() {
@@ -316,6 +346,7 @@ function applyFilters() {
   const pmax        = parseFloat(_val('f-pmax')) || Infinity;
   const minSqft     = parseFloat(_val('f-sqft')) || 0;
   const moveinBy    = _val('f-movein');
+  const moveinMode  = _val('f-movein-mode');
   const minBaths    = parseFloat(_val('f-baths')) || 0;
   const wantRatings = _checked('.f-rate');
   const wantAmen    = _checked('.f-amen');
@@ -334,8 +365,11 @@ function applyFilters() {
     if (source !== 'all' && c.dataset.source !== source) show = false;
     if (price && (price < pmin || price > pmax)) show = false;
     if (minSqft && (!sqft || sqft < minSqft)) show = false;
-    // move-in by: hide listings available only after the chosen date (unknown kept)
-    if (moveinBy && c.dataset.movein && c.dataset.movein > moveinBy) show = false;
+    // move-in: 'by' = available on/before the date; 'on' = exact match. Unknown kept.
+    if (moveinBy && c.dataset.movein) {
+      if (moveinMode === 'on' ? (c.dataset.movein !== moveinBy)
+                              : (c.dataset.movein > moveinBy)) show = false;
+    }
     if (minBaths && (!baths || baths < minBaths)) show = false;
     if (wantRatings.length && !wantRatings.includes(rating)) show = false;
     if (wantAmen.length && !wantAmen.every(a => amen.includes(a))) show = false;
@@ -349,12 +383,25 @@ function applyFilters() {
   });
   document.getElementById('f-hidden-count').textContent =
     hiddenFar ? hiddenFar + ' hidden (too far)' : '';
+  sortCards(_val('f-sort'));
   // hide sections that end up empty
   document.querySelectorAll('.section').forEach(s => {
     const cards = s.querySelectorAll('.card');
     if (!cards.length) return;
     const anyVisible = Array.from(cards).some(c => c.style.display !== 'none');
     s.style.display = anyVisible ? '' : 'none';
+  });
+}
+function sortCards(mode) {
+  document.querySelectorAll('.cards').forEach(box => {
+    const cards = Array.from(box.children);
+    cards.sort((a, b) => {
+      if (mode === 'added')   // newest first
+        return (b.dataset.added || '').localeCompare(a.dataset.added || '');
+      // distance: shortest bike time first (998 = unknown sorts last)
+      return (parseInt(a.dataset.bike || '998', 10)) - (parseInt(b.dataset.bike || '998', 10));
+    });
+    cards.forEach(c => box.appendChild(c));
   });
 }
 let _poll = null;
