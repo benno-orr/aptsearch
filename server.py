@@ -148,11 +148,6 @@ _CONTROLS = """
   <div class="filters-dd">
     <button class="btn-filters" onclick="toggleFilters()">⚙ Filters ▾</button>
     <div class="filters-panel" id="filters-panel">
-      <div class="fp-row"><label>sort by</label>
-        <select id="f-sort" onchange="applyFilters()">
-          <option value="distance">distance</option>
-          <option value="added">date added</option>
-        </select></div>
       <div class="fp-row"><label>source</label>
         <select id="f-source" onchange="applyFilters()">
           <option value="all" selected>all</option>
@@ -207,6 +202,12 @@ _CONTROLS = """
     </div>
   </div>
   <input type="checkbox" id="f-laundry" style="display:none">
+  <label class="sort-ctl">sort
+    <select id="f-sort" onchange="applyFilters()">
+      <option value="distance">distance</option>
+      <option value="added">date added</option>
+    </select>
+  </label>
   <span id="f-hidden-count" style="color:#999"></span>
   <button class="btn-swipe" onclick="openSwipe()">▶ Swipe mode</button>
   <span class="spacer"></span>
@@ -223,6 +224,8 @@ _CONTROLS = """
 .btn-swipe{background:#4f46e5;color:#fff;border:none;border-radius:8px;padding:6px 14px;font-size:0.9em;font-weight:600;cursor:pointer}
 .btn-swipe:hover{background:#4338ca}
 .filters-dd{position:relative;display:inline-block}
+.sort-ctl{display:inline-flex;align-items:center;gap:5px;font-size:0.88em;color:#374151}
+.sort-ctl select{border:1px solid #d1d5db;border-radius:6px;padding:4px 8px;font-size:0.9em}
 .btn-filters{background:#fff;border:1px solid #d1d5db;border-radius:8px;padding:6px 14px;font-size:0.9em;font-weight:600;cursor:pointer}
 .btn-filters:hover{background:#f3f4f6}
 .filters-panel{display:none;position:absolute;top:110%;left:0;z-index:900;background:#fff;border:1px solid #e5e7eb;border-radius:10px;box-shadow:0 8px 30px rgba(0,0,0,.18);padding:12px 14px;min-width:330px}

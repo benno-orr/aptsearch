@@ -404,7 +404,7 @@ h1{{font-size:1.6em;margin-bottom:4px}}
 .card.new{{border-left-color:#3b82f6}}
 .card.viewed{{border-left-color:#f59e0b}}
 .card.passed{{border-left-color:#d1d5db;opacity:.6}}
-.card.is-house{{outline:2px solid #d97706;outline-offset:-2px}}
+.card.is-house{{}}
 .card-body{{padding:14px 16px}}
 .thumb-link{{display:block;line-height:0}}
 .thumb{{width:100%;height:180px;object-fit:cover;background:#eef0f3;display:block}}
@@ -428,7 +428,7 @@ h1{{font-size:1.6em;margin-bottom:4px}}
 .avail{{background:#f3e8ff;color:#6b21a8;font-size:0.78em;font-weight:600;padding:1px 7px;border-radius:8px}}
 .commute{{background:#f0fdfa;color:#0f766e;font-size:0.8em;font-weight:600;padding:2px 8px;border-radius:8px}}
 .ec-badge{{display:inline-block;background:#dc2626;color:#fff;font-size:0.7em;font-weight:800;letter-spacing:.04em;padding:2px 8px;border-radius:10px;margin-right:6px;vertical-align:middle}}
-.card.east-cam{{box-shadow:0 2px 10px rgba(220,38,38,.25);border-left-color:#dc2626}}
+.card.east-cam{{}}
 .actions{{display:flex;flex-direction:column;gap:5px}}
 .act{{border:1px solid #d1d5db;background:#fff;border-radius:6px;padding:3px 9px;font-size:0.78em;cursor:pointer;color:#374151;text-align:left;white-space:nowrap}}
 .act:hover{{background:#f3f4f6}}
@@ -511,7 +511,6 @@ table.ss td.new-count{{font-weight:700;color:#166534}}
 <h1>Apartment Search &mdash; Cambridge / Somerville</h1>
 <p class="subtitle">Budget $2,000&ndash;$2,800/mo &nbsp;&middot;&nbsp; 1 Bedroom (whole unit) &nbsp;&middot;&nbsp; Move-in Sept 1 &nbsp;&middot;&nbsp; Commute: Kendall Square / Broad Institute &nbsp;&middot;&nbsp; {date}</p>
 {search_summary}
-<div class="pref-note">&#127919; <strong>Top priority: East Cambridge</strong> (red badge, always listed first) &middot; &#127968; units within houses (amber outline) &middot; in-unit laundry (blue badge) &middot; Sept 1 availability shown when known &middot; commute times to Broad Institute (&#128694; walk &middot; &#128692; bike &middot; &#128647; subway &middot; &#128652; bus; ~ = approximate location). Rooms in shared units are filtered out automatically.</div>
 {sections}
 <hr>
 <div class="section">
@@ -2855,10 +2854,11 @@ def _render_card(r, is_new_today=False, interactive=False, units=None):
         f'{avail_pl}</div>'
     )
     specs_html = row_specs_html(r)
-    spec_line  = (f'<div class="spec-line">{specs_html}'
-                  f'<span class="spec-hood">{hood}</span></div>')
-    addr_line  = (f'<div class="addr-line"><a href="{r["url"]}" target="_blank">{addr}</a></div>'
-                  if addr else "")
+    spec_line  = f'<div class="spec-line">{specs_html}</div>' if specs_html else ""
+    addr_inner = f'<a href="{r["url"]}" target="_blank">{addr}</a>' if addr else ""
+    if hood:
+        addr_inner += (f'{" &middot; " if addr else ""}<span class="spec-hood">{hood}</span>')
+    addr_line  = f'<div class="addr-line">{addr_inner}</div>' if addr_inner else ""
     # multi-unit building: list each available unit, linking to its own page
     units_html = ""
     if units and len(units) > 1:
