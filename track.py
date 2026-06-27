@@ -365,6 +365,10 @@ h1{{font-size:1.6em;margin-bottom:4px}}
 .spec-bba{{color:#1d4ed8}}
 .spec-sqft{{color:#0891b2}}
 .spec-avail{{color:#6d28d9}}
+.units-avail{{margin:8px 0}}
+.units-list{{display:flex;flex-wrap:wrap;gap:6px;margin-top:4px}}
+.unit-chip{{background:#eef2ff;color:#3730a3;border:1px solid #c7d2fe;border-radius:8px;padding:2px 9px;font-size:0.82em;font-weight:600;text-decoration:none}}
+.unit-chip:hover{{background:#e0e7ff;text-decoration:underline}}
 .addr-line{{margin-bottom:8px;font-size:0.9em}}
 .addr-line a{{color:#374151;text-decoration:none}}
 .addr-line a:hover{{text-decoration:underline}}
@@ -2744,11 +2748,21 @@ def streetview_heading(lat, lon):
         return None
 
 
-def _render_card(r, is_new_today=False, interactive=False):
+def _render_card(r, is_new_today=False, interactive=False, units=None):
     status     = r["status"]
     sc         = neighborhood_score(r["location"] or "")
     stars_str  = "★" * sc + "☆" * (5 - sc) if sc else "—"
-    price_str  = f"${r['price']:,}" if r["price"] else "—"
+    # multi-unit building: headline a price range across the available units
+    if units and len(units) > 1:
+        prices = sorted(u["price"] for u in units if u["price"])
+        if prices and prices[0] != prices[-1]:
+            price_str = f"${prices[0]:,}–${prices[-1]:,}"
+        elif prices:
+            price_str = f"${prices[0]:,}"
+        else:
+            price_str = "—"
+    else:
+        price_str = f"${r['price']:,}" if r["price"] else "—"
     src        = (r["source"] or "").lower()
     src_badge  = f'<span class="src src-{src}">{src}</span>' if src else ""
     is_house   = row_is_house(r)
@@ -2827,6 +2841,17 @@ def _render_card(r, is_new_today=False, interactive=False):
                   f'<span class="spec-hood">{hood}</span></div>')
     addr_line  = (f'<div class="addr-line"><a href="{r["url"]}" target="_blank">{addr}</a></div>'
                   if addr else "")
+    # multi-unit building: list each available unit, linking to its own page
+    units_html = ""
+    if units and len(units) > 1:
+        links = "".join(
+            f'<a href="{u["url"]}" target="_blank" class="unit-chip">'
+            f'{("#" + u["label"]) if u["label"] else "unit"}'
+            f'{(" · $" + format(u["price"], ",")) if u["price"] else ""}</a>'
+            for u in sorted(units, key=lambda u: (u["price"] or 10**9))
+        )
+        units_html = (f'<div class="units-avail"><div class="ac-h">{len(units)} units available</div>'
+                      f'<div class="units-list">{links}</div></div>')
     addr_html  = ""  # caption strip removed; price/spec/addr now live in card-body
     new_flag   = ' <span class="new-today">NEW TODAY</span>' if is_new_today else ""
     notes_html = (
@@ -2934,6 +2959,7 @@ def _render_card(r, is_new_today=False, interactive=False):
         f'{price_line}'
         f'{spec_line}'
         f'{addr_line}'
+        f'{units_html}'
         f'{hood_html}'
         f'{amen_commute_html}'
         f'{notes_html}'
@@ -2948,7 +2974,8 @@ def _render_sections(all_rows, new_ids=None, interactive=False):
     sections_html = ""
     hidden_far = 0
     for status, label in _SECTION_DEFS:
-        rows = [r for r in all_rows if r["status"] == status]
+        # drop cross-source duplicates here; distinct units are merged below
+        rows = [r for r in all_rows if r["status"] == status and not _row_get(r, "duplicate")]
         if not rows:
             continue
         if not interactive:
@@ -2962,10 +2989,27 @@ def _render_sections(all_rows, new_ids=None, interactive=False):
             if not rows:
                 continue
         rows.sort(key=_row_sort_key)  # East Cambridge first, then distance
-        cards = "".join(
-            _render_card(r, is_new_today=(r["id"] in new_ids), interactive=interactive)
-            for r in rows
-        )
+        # group units at the same building address into one card
+        groups, order = {}, []
+        for r in rows:
+            key = _norm_building(r) or f"__{r['id']}"
+            if key not in groups:
+                groups[key] = []
+                order.append(key)
+            groups[key].append(r)
+        card_list = []
+        for key in order:
+            g = groups[key]
+            if len(g) == 1:
+                card_list.append(_render_card(g[0], is_new_today=(g[0]["id"] in new_ids),
+                                              interactive=interactive))
+            else:
+                rep = min(g, key=lambda r: (r["price"] or 10**9))  # cheapest = headline
+                units = [{"label": row_unit(r), "url": r["url"], "price": r["price"]} for r in g]
+                is_new = any(r["id"] in new_ids for r in g)
+                card_list.append(_render_card(rep, is_new_today=is_new,
+                                              interactive=interactive, units=units))
+        cards = "".join(card_list)
         sections_html += (
             f'<div class="section">'
             f'<div class="sec-header">'
@@ -3385,6 +3429,18 @@ def _norm_addr(r):
     a = re.sub(r"\s+", " ", a).strip()
     unit = row_unit(r)
     return f"{a} #{unit.lower()}" if unit else a
+
+
+def _norm_building(r):
+    """Normalized street address WITHOUT the unit — groups units of one building.
+    '' when there's no street address (so such rows are never grouped)."""
+    addr = extract_address(r["location"] or "") or extract_address(r["title"] or "")
+    if not addr:
+        return ""
+    a = addr.lower().replace(".", "")
+    a = " ".join(_ADDR_SUFFIX.get(w, w) for w in a.split())
+    a = re.sub(r"[^\w ]", "", a)
+    return re.sub(r"\s+", " ", a).strip()
 
 
 def _completeness(r):
