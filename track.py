@@ -330,13 +330,33 @@ h1{{font-size:1.6em;margin-bottom:4px}}
 .map-bub{{background:rgba(255,255,255,.95);border-radius:9px;padding:1px 7px;font-size:11px;font-weight:700;line-height:18px;box-shadow:0 1px 2px rgba(0,0,0,.3);white-space:nowrap}}
 .bub-walk{{color:#15803d;border:1px solid #16a34a}}
 .bub-transit{{color:#6d28d9;border:1px solid #7c3aed}}
+.bub-bike{{color:#c2410c;border:1px solid #ea580c}}
 .media-split{{display:flex;gap:6px}}
 .media-split > *{{flex:1;min-width:0}}
 .media-row .minimap{{width:100%;height:180px;aspect-ratio:auto;margin:0;border-radius:0}}
 .media-row .sv-link{{display:block;width:100%;line-height:0;position:relative}}
 .media-row .streetview{{width:100%;height:180px;object-fit:cover;border-radius:0}}
 .sv-tag{{position:absolute;left:8px;bottom:8px;background:rgba(0,0,0,.6);color:#fff;font-size:0.66em;font-weight:700;padding:2px 7px;border-radius:6px;line-height:1.4}}
-.card{{background:#fff;border-radius:10px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08);border-left:4px solid #e5e7eb}}
+.card{{position:relative;background:#fff;border-radius:10px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08);border-left:4px solid #e5e7eb}}
+.rating-col{{position:absolute;top:8px;right:8px;z-index:600;display:flex;flex-direction:column;gap:6px}}
+.rating-col .rate{{font-size:1.5em;line-height:1;width:46px;height:46px;border-radius:12px;border:2px solid transparent;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0;opacity:.8;transition:transform .08s}}
+.rating-col .rate:hover{{opacity:1;transform:scale(1.08)}}
+.rating-col .rate-no{{background:#fecaca}}
+.rating-col .rate-hmm{{background:#fef08a}}
+.rating-col .rate-ok{{background:#bbf7d0}}
+.rating-col .rate-love{{background:#fbcfe8}}
+.rating-col .rate.rated-on{{opacity:1;border-color:#111;transform:scale(1.12);box-shadow:0 2px 8px rgba(0,0,0,.3)}}
+.price-line{{font-size:1.45em;font-weight:800;line-height:1.1;margin-bottom:3px}}
+.price-line a{{color:#111;text-decoration:none}}
+.price-line a:hover{{text-decoration:underline}}
+.price-line .permo{{font-size:0.6em;font-weight:600;color:#6b7280}}
+.spec-line{{margin-bottom:5px;font-size:0.9em;font-weight:700;display:flex;gap:10px;flex-wrap:wrap}}
+.spec-bba{{color:#1d4ed8}}
+.spec-sqft{{color:#0891b2}}
+.spec-avail{{color:#6d28d9}}
+.addr-line{{margin-bottom:8px;font-size:0.9em}}
+.addr-line a{{color:#374151;text-decoration:none}}
+.addr-line a:hover{{text-decoration:underline}}
 .card.interested{{border-left-color:#22c55e}}
 .card.applied{{border-left-color:#8b5cf6}}
 .card.new{{border-left-color:#3b82f6}}
@@ -1180,11 +1200,26 @@ def _apts_detail_parse(html):
         return float(m.group(0)) if m else None
 
     sqm = re.search(r'([\d,]+)\s*sq', pairs.get("Square Feet", ""))
+
+    # amenities/features section (rich list: Dishwasher, High Speed Internet,
+    # Heating Available, laundry, etc.) → stored as amen_text for row_amenities
+    amen_text = ""
+    am = re.search(r'amenitiesSectionV2.*?(?=mls-feature-section|class="mapSection|</body)', html, re.S)
+    if am:
+        amen_text = re.sub(r'<[^>]+>', ' ', am.group(0))
+        amen_text = re.sub(r'\s+', ' ', amen_text).strip()[:2500]
+
+    # gallery photos (dedupe, keep order, cap)
+    photos = list(dict.fromkeys(
+        re.findall(r'https://images1\.apartments\.com/i2/[^"\'\s)]+', html)))[:24]
+
     return {
         "beds":  _num(pairs.get("Bedrooms")),
         "baths": _num(pairs.get("Bathrooms")),
         "sqft":  int(sqm.group(1).replace(",", "")) if sqm else None,
         "avail": parse_move_in(pairs.get("Available", "")),
+        "amen_text": amen_text,
+        "photos": photos,
     }
 
 
@@ -1215,10 +1250,12 @@ async def _enrich_apts_details_pw(urls, log=print):
                         continue
                     consecutive_blocks = 0
                     info = _apts_detail_parse(await page.content())
-                    if info["beds"] is not None or info["sqft"] is not None or info["avail"]:
+                    if (info["beds"] is not None or info["sqft"] is not None
+                            or info["avail"] or info["amen_text"] or info["photos"]):
                         out[u] = info
                         log(f"  [{i+1}/{len(urls)}] beds={info['beds']} baths={info['baths']} "
-                            f"sqft={info['sqft']} avail={info['avail'] or '—'}")
+                            f"sqft={info['sqft']} avail={info['avail'] or '—'} "
+                            f"photos={len(info['photos'])}")
                 except Exception as e:
                     log(f"  [{i+1}/{len(urls)}] error: {e}")
                 await page.wait_for_timeout(1200)
@@ -1246,11 +1283,15 @@ def enrich_apts_details(conn, log=print, only_missing=True):
             continue
         conn.execute(
             "UPDATE listings SET beds=?, baths=?, sqft=?, "
-            "available=COALESCE(NULLIF(?,''), available), updated_on=? WHERE id=?",
-            (d["beds"], d["baths"], d["sqft"], d["avail"] or "", now(), r["id"]))
+            "available=COALESCE(NULLIF(?,''), available), "
+            "amen_text=COALESCE(NULLIF(?,''), amen_text), "
+            "photos=COALESCE(NULLIF(?,''), photos), updated_on=? WHERE id=?",
+            (d["beds"], d["baths"], d["sqft"], d["avail"] or "",
+             d["amen_text"] or "", _json.dumps(d["photos"]) if d["photos"] else "",
+             now(), r["id"]))
         n += 1
     conn.commit()
-    log(f"  updated {n} listing(s) with beds/baths/sqft")
+    log(f"  updated {n} listing(s) with beds/baths/sqft/amenities/photos")
     return n
 
 
@@ -1632,6 +1673,7 @@ async def _scrape_hotpads_pw():
                                 "date":      "",
                                 "source":    "hotpads",
                                 "image":     lst.get("medPhotoUrl") or "",
+                                "_photos":   lst.get("medPhotoUrls") or [],
                                 "_lat":      geo.get("lat"),
                                 "_lon":      geo.get("lon"),
                                 "_house":    1 if ptype in _HOTPADS_HOUSE_TYPES else 0,
@@ -2312,6 +2354,9 @@ _PARK_NO  = re.compile(r'\bno\s+parking\b', re.I)
 _DISH_YES = re.compile(r'\b(dishwasher|dish\s?washer|d/?w)\b', re.I)
 _DISH_NO  = re.compile(r'\bno\s+dishwasher\b', re.I)
 _DISP_YES = re.compile(r'\b(garbage\s+disposal|insinkerator|disposal)\b', re.I)
+_WIFI_YES = re.compile(r'\b(wi-?fi|wireless\s+internet|internet\s+included|high.?speed\s+internet)\b', re.I)
+_HEAT_YES = re.compile(r'\b(heat(?:ing)?(?:\s+(?:incl\w*|included))?|hot\s*water\s+incl\w*|'
+                       r'heat\s*[&/]\s*hot\s*water|radiator|forced\s+(?:hot\s+)?air|central\s+heat)\b', re.I)
 
 
 def _amen_flag(text, yes_re, no_re=None):
@@ -2323,13 +2368,24 @@ def _amen_flag(text, yes_re, no_re=None):
 
 
 def row_amenities(r):
-    """{laundry, parking, dishwasher, disposal} each 'yes'|'no'|'unknown'."""
-    text = (r["title"] or "") + " " + (r["location"] or "")
+    """{laundry, parking, dishwasher, disposal, wifi, heat} each yes|no|unknown.
+    Scans title + location + amen_text (the rich amenities list scraped from
+    detail pages, when available)."""
+    def _g(k):
+        try:
+            return r[k] or ""
+        except (KeyError, IndexError):
+            return ""
+    amen = _g("amen_text")
+    text = " ".join([r["title"] or "", r["location"] or "", amen])
+    laundry = "yes" if (row_has_laundry(r) or _LAUNDRY_RE.search(amen)) else "unknown"
     return {
-        "laundry":    "yes" if row_has_laundry(r) else "unknown",
+        "laundry":    laundry,
         "parking":    _amen_flag(text, _PARK_YES, _PARK_NO),
         "dishwasher": _amen_flag(text, _DISH_YES, _DISH_NO),
         "disposal":   _amen_flag(text, _DISP_YES),
+        "wifi":       _amen_flag(text, _WIFI_YES),
+        "heat":       _amen_flag(text, _HEAT_YES),
     }
 
 
@@ -2371,6 +2427,8 @@ _AM_DEFS = [
     ("parking",    "&#128663;", "Parking"),            # 🚗
     ("dishwasher", "&#127869;", "Dishwasher"),         # 🍽
     ("disposal",   "&#128688;", "Garbage disposal"),   # 🚰
+    ("wifi",       "&#128246;", "WiFi / internet"),    # 📶
+    ("heat",       "&#128293;", "Heat"),               # 🔥
 ]
 _AM_MARK = {"yes": "&#10003;", "no": "&#10007;", "unknown": "?"}   # ✓ ✗ ?
 _AM_CLS  = {"yes": "am-yes", "no": "am-no", "unknown": "am-unk"}
@@ -2407,22 +2465,51 @@ def row_rating(r):
         return ""
 
 
-def row_specs(r):
-    """Compact 'beds/baths/sqft' string from detail-page data, or '' if none."""
-    def _g(k):
-        try:
-            return r[k]
-        except (KeyError, IndexError):
-            return None
-    bits = []
-    beds, baths, sqft = _g("beds"), _g("baths"), _g("sqft")
+def _row_get(r, k):
+    try:
+        return r[k]
+    except (KeyError, IndexError):
+        return None
+
+
+def row_specs_html(r):
+    """Colored spec spans: '1bd 1ba' (no dot) in one color + sqft in another."""
+    beds, baths, sqft = _row_get(r, "beds"), _row_get(r, "baths"), _row_get(r, "sqft")
+    out = ""
+    bb = []
     if beds is not None:
-        bits.append(f"{beds:g} bd")
+        bb.append(f"{beds:g}bd")
     if baths is not None:
-        bits.append(f"{baths:g} ba")
+        bb.append(f"{baths:g}ba")
+    if bb:
+        out += f'<span class="spec-bba">{" ".join(bb)}</span>'
     if sqft:
-        bits.append(f"{sqft:,} ft&sup2;")
-    return " · ".join(bits)
+        out += f'<span class="spec-sqft">{sqft:,} ft&sup2;</span>'
+    return out
+
+
+def row_photos(r):
+    """List of photo URLs for a listing — parsed from the photos JSON column,
+    falling back to the single thumbnail image."""
+    raw = _row_get(r, "photos")
+    if raw:
+        try:
+            pics = _json.loads(raw)
+            if isinstance(pics, list) and pics:
+                return pics
+        except (ValueError, TypeError):
+            pass
+    img = _row_get(r, "image")
+    return [img] if img else []
+
+
+_UNIT_RE = re.compile(r'\b(?:unit|apt\.?|apartment|#)\s*([0-9]+[A-Za-z]?|[A-Za-z]?[0-9]+)\b', re.I)
+
+
+def row_unit(r):
+    """Unit number pulled from the title (e.g. 'Unit 2R', '#3'), or '' if none."""
+    m = _UNIT_RE.search(r["title"] or "")
+    return m.group(1) if m else ""
 
 
 def _row_walk(r):
@@ -2488,7 +2575,6 @@ def color(status, text):
 # ── HTML export ────────────────────────────────────────────────────────────────
 
 _SECTION_DEFS = [
-    ("interested", "Interested"),
     ("applied",    "Applied"),
     ("new",        "New"),
     ("viewed",     "Viewed"),
@@ -2574,11 +2660,14 @@ def _render_card(r, is_new_today=False, interactive=False):
         walk_attr = f' data-walk="{walk_min}"' if walk_min is not None else ""
         transit_attr = (f' data-transit="{transit[0]}" data-tmode="{transit[1]}"'
                         if show_transit else "")
+        bike_min = _g("bike_min")
         bubbles = ""
         if walk_min is not None:
             bubbles += f'<span class="map-bub bub-walk">🚶 {walk_min} min</span>'
         if show_transit:
             bubbles += f'<span class="map-bub bub-transit">{transit[2]} {transit[0]} min</span>'
+        if bike_min is not None:
+            bubbles += f'<span class="map-bub bub-bike">🚴 {bike_min} min</span>'
         minimap_html = (
             f'<div class="minimap-wrap">'
             f'<div class="minimap" data-lat="{r["lat"]}" data-lon="{r["lon"]}" '
@@ -2599,15 +2688,19 @@ def _render_card(r, is_new_today=False, interactive=False):
     addr       = (r["location"] or "").strip()
     addr       = re.sub(r'\s*\b\d{5}(?:-\d{4})?\b\s*$', '', addr).strip().rstrip(",").strip()
     addr       = re.sub(r',?\s*\b(MA|Mass|Massachusetts)\b\s*$', '', addr, flags=re.I).strip().rstrip(",").strip()
-    addr_bits  = [f'<span class="addr-price">{price_str}</span>']
-    specs      = row_specs(r)
-    if specs:
-        addr_bits.append(f'<span class="addr-specs">{specs}</span>')
-    if addr:
-        addr_bits.append(f'<span class="addr-loc">{addr}</span>')
-    if avail:
-        addr_bits.append(f'<span class="addr-avail">avail {avail}</span>')
-    addr_html  = f'<div class="addr-cap">{" &middot; ".join(addr_bits)}</div>'
+    # include the unit number (from the title) in the address when not already there
+    unit = row_unit(r)
+    if unit and not re.search(r'(?:unit|apt|#)\s*' + re.escape(unit) + r'\b', addr, re.I):
+        addr = f"{addr} #{unit}" if addr else f"#{unit}"
+    price_line = (f'<div class="price-line"><a href="{r["url"]}" target="_blank">'
+                  f'{price_str}<span class="permo">/mo</span></a></div>')
+    specs_html = row_specs_html(r)
+    avail_span = f'<span class="spec-avail">{avail}</span>' if avail else ""
+    spec_line  = (f'<div class="spec-line">{specs_html}{avail_span}</div>'
+                  if (specs_html or avail_span) else "")
+    addr_line  = (f'<div class="addr-line"><a href="{r["url"]}" target="_blank">{addr}</a></div>'
+                  if addr else "")
+    addr_html  = ""  # caption strip removed; price/spec/addr now live in card-body
     new_flag   = ' <span class="new-today">NEW TODAY</span>' if is_new_today else ""
     notes_html = (
         f'<div class="notes">{r["notes"]}</div>'
@@ -2666,20 +2759,23 @@ def _render_card(r, is_new_today=False, interactive=False):
         actions_col = (
             f'<div class="ac-col"><div class="ac-h">Status</div>'
             f'<div class="actions">'
-            f'<button class="act act-interested" onclick="setStatus({rid},\'interested\')">★ interested</button>'
             f'<button class="act act-viewed" onclick="setStatus({rid},\'viewed\')">~ viewed</button>'
             f'<button class="act act-applied" onclick="setStatus({rid},\'applied\')">✓ applied</button>'
             f'<button class="act act-passed" onclick="setStatus({rid},\'passed\')">✗ pass</button>'
             f'<button class="act" onclick="addNote({rid})">+ note</button>'
-            f'</div>'
-            f'<div class="ac-h ac-h-rate">Rating</div>'
-            f'<div class="actions rate-row">'
-            f'<button class="rate rate-love{_ron("love")}" onclick="setRating({rid},\'love\')">😍</button>'
-            f'<button class="rate rate-ok{_ron("ok")}" onclick="setRating({rid},\'ok\')">😊</button>'
-            f'<button class="rate rate-hmm{_ron("hmm")}" onclick="setRating({rid},\'hmm\')">🤔</button>'
-            f'<button class="rate rate-no{_ron("no")}" onclick="setRating({rid},\'no\')">😤</button>'
             f'</div></div>'
         )
+        # Rating emojis as a pastel vertical column on the right edge of the card.
+        rating_col = (
+            f'<div class="rating-col">'
+            f'<button class="rate rate-no{_ron("no")}" title="no" onclick="setRating({rid},\'no\')">😤</button>'
+            f'<button class="rate rate-hmm{_ron("hmm")}" title="maybe" onclick="setRating({rid},\'hmm\')">🤔</button>'
+            f'<button class="rate rate-ok{_ron("ok")}" title="yes" onclick="setRating({rid},\'ok\')">😊</button>'
+            f'<button class="rate rate-love{_ron("love")}" title="love" onclick="setRating({rid},\'love\')">😍</button>'
+            f'</div>'
+        )
+    else:
+        rating_col = ""
     amen_commute_html = (
         f'<div class="amen-commute">'
         f'<div class="ac-col"><div class="ac-h">Amenities</div>{amen_html}</div>'
@@ -2688,13 +2784,13 @@ def _render_card(r, is_new_today=False, interactive=False):
     return (
         f'<div class="card {status}{house_cls}{laundry_cls}{ec_cls}{delisted_cls}" data-id="{r["id"]}" data-bike="{_row_bike(r)}" data-source="{src}" data-rating="{rating}" data-delisted="{1 if is_delisted else 0}">'
         f'{delisted_banner}'
+        f'{rating_col}'
         f'{banner_html}'
         f'{media_row}'
-        f'{addr_html}'
         f'<div class="card-body">'
-        f'<div class="card-title">'
-        f'{ec_badge}'
-        f'<a href="{r["url"]}" target="_blank">{r["title"] or r["url"][:60]}</a></div>'
+        f'{price_line}'
+        f'{spec_line}'
+        f'{addr_line}'
         f'{hood_html}'
         f'{amen_commute_html}'
         f'{notes_html}'
@@ -3001,13 +3097,14 @@ def _save_listings(conn, results, source):
             cur = conn.execute(
                 "INSERT INTO listings "
                 "(url, title, price, location, status, notes, source, is_house, image, "
-                " has_laundry, available, lat, lon, geo_src, fingerprint, added_on, updated_on, listed_on) "
-                "VALUES (?, ?, ?, ?, 'new', '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " has_laundry, available, lat, lon, geo_src, fingerprint, added_on, updated_on, listed_on, photos) "
+                "VALUES (?, ?, ?, ?, 'new', '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (r["url"], title or None, price, location or None, source,
                  int(r.get("_house") or 0), r.get("image") or "",
                  int(r.get("_laundry") or 0), r.get("_avail") or "",
                  r.get("_lat"), r.get("_lon"),
-                 "addr" if r.get("_lat") else "", fp, ts, ts, r.get("_listed_on")),
+                 "addr" if r.get("_lat") else "", fp, ts, ts, r.get("_listed_on"),
+                 _json.dumps(r["_photos"]) if r.get("_photos") else None),
             )
             conn.commit()
             r["_id"] = cur.lastrowid
