@@ -560,9 +560,10 @@ table.ss td.new-count{{font-weight:700;color:#166534}}
 
   // Street View pan on the grid: animate a 180° sweep (15° steps, pauses at the
   // ends) only while the card is on screen, to limit Static API requests.
-  var svOffsets = []; for (var o = -90; o <= 90; o += 5) svOffsets.push(o);
+  var svOffsets = []; for (var o = -90; o <= 90; o += 15) svOffsets.push(o);
   function svBaseUrl(src) {{ return src.replace(/&heading=\\d+/, ''); }}
-  function svDwell(idx, n) {{ var d = Math.min(idx, n-1-idx); return Math.max(16, 500/Math.pow(2, Math.min(d,6))); }}
+  // pendulum easing: fast through the middle, decelerating to the turnarounds
+  function svDwell(idx, n) {{ return Math.min(650, Math.max(120, 130/Math.max(Math.sin(Math.PI*idx/(n-1)),0.2))); }}
   function startSV(img) {{
     if (img.dataset.svAnim) return;
     var base = parseInt(img.dataset.svbase, 10);

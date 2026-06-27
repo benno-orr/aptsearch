@@ -429,7 +429,7 @@ function swipeStreetView(m) {
   const cap = document.createElement('span'); cap.className='sv-cap'; cap.textContent='📷 Street View'; el.appendChild(cap);
   // 180° sweep centered on the building, in 5° steps (base-90 … base+90)
   const base = (m.sv_heading == null) ? 0 : m.sv_heading;
-  const offsets = []; for (let o = -90; o <= 90; o += 5) offsets.push(o);
+  const offsets = []; for (let o = -90; o <= 90; o += 15) offsets.push(o);
   const heads = offsets.map(o => (base + o + 360) % 360);
   function url(h) {
     let s = 'https://maps.googleapis.com/maps/api/streetview?size=640x360&location='+m.sv_lat+','+m.sv_lon+
@@ -438,9 +438,9 @@ function swipeStreetView(m) {
     return s;
   }
   heads.forEach(h => { const p = new Image(); p.src = url(h); }); // preload all frames
-  // ease-out near the edges: dwell maxes at 500ms at the very edge and halves
-  // each step inward (fast through the middle, slows over the last 30°)
-  const dwell = idx => { const d = Math.min(idx, heads.length-1-idx); return Math.max(16, 500/Math.pow(2, Math.min(d,6))); };
+  // pendulum easing: fastest through the middle, decelerating to the turnarounds
+  // (dwell ∝ 1/sin, so frame time grows smoothly toward each edge)
+  const dwell = idx => Math.min(650, Math.max(120, 130/Math.max(Math.sin(Math.PI*idx/(heads.length-1)),0.2)));
   let i = (heads.length - 1) >> 1, dir = 1;   // start centered on the building
   img.src = url(heads[i]);
   img.onerror = () => { el.style.display='none'; if (_svTimer) clearTimeout(_svTimer); };
