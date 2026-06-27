@@ -1758,10 +1758,12 @@ async def _scrape_hotpads_pw():
 
 # ── Facebook Marketplace scraper ──────────────────────────────────────────────
 
+# street name token allows numbered streets ("5th", "1st") as well as words
 _STREET_RE = re.compile(
-    r'\b(\d{1,5}\s+[A-Z][A-Za-z.]*(?:\s+[A-Z][A-Za-z.]*){0,3}\s+'
+    r'\b(\d{1,5}[A-Za-z]?\s+(?:\d{1,3}(?:st|nd|rd|th)|[A-Z][A-Za-z.]*)(?:\s+[A-Za-z.]+){0,3}\s+'
     r'(?:St|Street|Ave|Avenue|Rd|Road|Dr|Drive|Ln|Lane|Blvd|Boulevard|Ct|Court|'
-    r'Pl|Place|Ter|Terrace|Way|Sq|Square|Pkwy|Hwy|Cir|Circle|Row))\b\.?')
+    r'Pl|Place|Ter|Terrace|Way|Sq|Square|Pkwy|Hwy|Cir|Circle|Row))\b\.?',
+    re.I)
 
 
 def extract_address(text):
@@ -3416,33 +3418,39 @@ _ADDR_SUFFIX = {
     "lane": "ln", "boulevard": "blvd", "court": "ct", "place": "pl",
     "terrace": "ter", "square": "sq", "parkway": "pkwy", "highway": "hwy",
     "circle": "cir",
+    # spelled-out ordinals → numeric, so "Fifth St" == "5th St"
+    "first": "1st", "second": "2nd", "third": "3rd", "fourth": "4th",
+    "fifth": "5th", "sixth": "6th", "seventh": "7th", "eighth": "8th",
+    "ninth": "9th", "tenth": "10th", "eleventh": "11th", "twelfth": "12th",
 }
 
 
-def _norm_addr(r):
-    """Normalized street address (+ unit) for duplicate detection, or '' when no
-    street address is present (city-only listings are never grouped)."""
-    addr = extract_address(r["location"] or "") or extract_address(r["title"] or "")
-    if not addr:
-        return ""
+def _addr_key(addr):
+    """Canonicalize a street address: lowercase, standard suffixes/ordinals, and
+    drop a trailing letter on the house number ('208A Washington' → '208 …') so
+    address variants of the same building collapse together."""
     a = addr.lower().replace(".", "")
     a = " ".join(_ADDR_SUFFIX.get(w, w) for w in a.split())
     a = re.sub(r"[^\w ]", "", a)
     a = re.sub(r"\s+", " ", a).strip()
-    unit = row_unit(r)
-    return f"{a} #{unit.lower()}" if unit else a
+    return re.sub(r"^(\d+)[a-z]\b", r"\1", a)   # 208a → 208
 
 
 def _norm_building(r):
     """Normalized street address WITHOUT the unit — groups units of one building.
     '' when there's no street address (so such rows are never grouped)."""
     addr = extract_address(r["location"] or "") or extract_address(r["title"] or "")
-    if not addr:
+    return _addr_key(addr) if addr else ""
+
+
+def _norm_addr(r):
+    """Normalized street address (+ unit) for duplicate detection, or '' when no
+    street address is present (city-only listings are never grouped)."""
+    b = _norm_building(r)
+    if not b:
         return ""
-    a = addr.lower().replace(".", "")
-    a = " ".join(_ADDR_SUFFIX.get(w, w) for w in a.split())
-    a = re.sub(r"[^\w ]", "", a)
-    return re.sub(r"\s+", " ", a).strip()
+    unit = row_unit(r)
+    return f"{b} #{unit.lower()}" if unit else b
 
 
 def _completeness(r):
