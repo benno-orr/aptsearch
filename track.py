@@ -397,6 +397,7 @@ h1{{font-size:1.6em;margin-bottom:4px}}
 .unit-chip{{background:#eef2ff;color:#3730a3;border:1px solid #c7d2fe;border-radius:8px;padding:2px 9px;font-size:0.82em;font-weight:600;text-decoration:none}}
 .unit-chip:hover{{background:#e0e7ff;text-decoration:underline}}
 .addr-line{{margin-bottom:8px;font-size:0.9em}}
+.addr-none{{color:#9ca3af;font-style:italic}}
 .addr-line a{{color:#374151;text-decoration:none}}
 .addr-line a:hover{{text-decoration:underline}}
 .card.interested{{border-left-color:#22c55e}}
@@ -2855,10 +2856,20 @@ def _render_card(r, is_new_today=False, interactive=False, units=None):
     )
     specs_html = row_specs_html(r)
     spec_line  = f'<div class="spec-line">{specs_html}</div>' if specs_html else ""
-    addr_inner = f'<a href="{r["url"]}" target="_blank">{addr}</a>' if addr else ""
+    # show the street address, or flag that it's withheld / not findable
+    has_street = bool(extract_address(r["location"] or "") or extract_address(r["title"] or ""))
+    blob = f'{r["location"] or ""} {r["title"] or ""}'
+    withheld = re.search(r'not disclosed|address withheld|undisclosed|upon request|'
+                         r'contact .{0,20}address', blob, re.I)
+    if has_street and addr:
+        addr_inner = f'<a href="{r["url"]}" target="_blank">{addr}</a>'
+    elif withheld:
+        addr_inner = '<span class="addr-none">&#128274; address not disclosed</span>'
+    else:
+        addr_inner = '<span class="addr-none">&#128269; address not found</span>'
     if hood:
-        addr_inner += (f'{" &middot; " if addr else ""}<span class="spec-hood">{hood}</span>')
-    addr_line  = f'<div class="addr-line">{addr_inner}</div>' if addr_inner else ""
+        addr_inner += f' &middot; <span class="spec-hood">{hood}</span>'
+    addr_line  = f'<div class="addr-line">{addr_inner}</div>'
     # multi-unit building: list each available unit, linking to its own page
     units_html = ""
     if units and len(units) > 1:
