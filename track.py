@@ -1626,7 +1626,7 @@ HOTPADS_SEARCH_URL = (
 _HOTPADS_HOUSE_TYPES = {"house", "townhouse", "divided"}
 
 
-def _hotpads_api_url(offset, limit):
+def _hotpads_api_url(offset, limit, components="basic,model"):
     bb = HOTPADS_BBOX
     return (
         "https://hotpads.com/hotpads-api/api/v2/listing/byCoordsV2?"
@@ -1639,8 +1639,16 @@ def _hotpads_api_url(offset, limit):
         f"&lat={bb['lat']}&lon={bb['lon']}"
         f"&maxLat={bb['maxLat']}&maxLon={bb['maxLon']}"
         f"&minLat={bb['minLat']}&minLon={bb['minLon']}"
-        f"&offset={offset}&limit={limit}&components=basic,model"
+        f"&offset={offset}&limit={limit}&components={components}"
     )
+
+
+def _hotpads_movein(lst):
+    """Best-effort move-in date from a HotPads listing — scans for any unit
+    availability field (the 'units' component exposes these). '' if none."""
+    m = re.search(r'"(?:availableDate|dateAvailable|availabilityDate|moveInDate|'
+                  r'earliestMoveInDate|availableOn)"\s*:\s*"?([^",}]+)', _json.dumps(lst))
+    return parse_move_in(m.group(1)) if m else ""
 
 
 def _hotpads_one_br_price(lst):
@@ -1700,13 +1708,27 @@ async def _scrape_hotpads_pw():
                 break
 
             # Paginate the API (limit 80 honored; ~350 in box → up to 5 pages).
+            # Try the richer 'units' component (carries per-unit availability /
+            # move-in); fall back to basic,model if that variant is rejected.
+            components = "basic,model,units"
             offset, limit = 0, 80
             for _ in range(6):
-                resp = await page.request.get(_hotpads_api_url(offset, limit))
+                resp = await page.request.get(_hotpads_api_url(offset, limit, components))
+                if resp.status != 200 and components != "basic,model":
+                    components = "basic,model"               # fall back, retry page
+                    resp = await page.request.get(_hotpads_api_url(offset, limit, components))
                 if resp.status != 200:
                     print(f"  [hotpads] API returned {resp.status} at offset {offset}")
                     break
-                data = (await resp.json()).get("data", {}) or {}
+                try:
+                    data = (await resp.json()).get("data", {}) or {}
+                except Exception:
+                    if components != "basic,model":
+                        components = "basic,model"
+                        resp = await page.request.get(_hotpads_api_url(offset, limit, components))
+                        data = (await resp.json()).get("data", {}) or {}
+                    else:
+                        break
                 buildings = data.get("buildings", []) or []
                 if not buildings:
                     break
@@ -1745,11 +1767,10 @@ async def _scrape_hotpads_pw():
                                 "_lon":      geo.get("lon"),
                                 "_house":    1 if ptype in _HOTPADS_HOUSE_TYPES else 0,
                                 "_laundry":  0,   # not exposed on search cards
-                                # `activated` = epoch ms when first listed. Move-in
-                                # date isn't exposed by the search API and the pad
-                                # detail pages are bot-walled, so it stays blank.
+                                # `activated` = epoch ms when first listed.
                                 "_listed_on": epoch_ms_to_ymd(lst.get("activated")),
-                                "_avail":    "",
+                                # move-in from the 'units' component when available
+                                "_avail":    _hotpads_movein(lst),
                             })
                         except Exception:
                             continue
@@ -3301,11 +3322,24 @@ def _enrich(results):
 
 def _save_listings(conn, results, source):
     ts = now()
+    # existing normalized address+unit keys — a new scrape matching one of these
+    # is the same unit (often from another source) and is skipped, so it isn't
+    # re-added. Genuinely new units at a known building still get inserted and
+    # group under that building's card at render time.
+    existing_keys = set()
+    for row in conn.execute("SELECT title, location FROM listings WHERE COALESCE(delisted,0)=0").fetchall():
+        k = _norm_addr(row)
+        if k:
+            existing_keys.add(k)
     added, skipped = [], []
     for r in results:
         title    = r.get("title") or ""
         location = r.get("location") or ""
         price    = r.get("price_int")
+        nkey = _norm_addr(r)
+        if nkey and nkey in existing_keys:
+            skipped.append(None)          # same address+unit already tracked
+            continue
         fp = fingerprint(title, location, price)
         dup, dup_id = is_duplicate(conn, r["url"], fp)
         if dup:
@@ -3327,6 +3361,8 @@ def _save_listings(conn, results, source):
             conn.commit()
             r["_id"] = cur.lastrowid
             added.append(r)
+            if nkey:
+                existing_keys.add(nkey)
         except Exception:
             pass
     return added, skipped
