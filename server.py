@@ -187,7 +187,8 @@ _CONTROLS = """
       <div class="fp-row">
         <label class="cbx"><input type="checkbox" id="f-house" onchange="applyFilters()"> house only</label>
         <label class="cbx"><input type="checkbox" id="f-hidepassed" checked onchange="applyFilters()"> hide passed</label>
-        <label class="cbx"><input type="checkbox" id="f-hideremoved" checked onchange="applyFilters()"> hide removed</label></div>
+        <label class="cbx"><input type="checkbox" id="f-hideremoved" checked onchange="applyFilters()"> hide removed</label>
+        <label class="cbx"><input type="checkbox" id="f-hidedup" checked onchange="applyFilters()"> hide duplicates</label></div>
     </div>
   </div>
   <input type="checkbox" id="f-laundry" style="display:none">
@@ -306,6 +307,7 @@ function applyFilters() {
   const houseOnly   = document.getElementById('f-house').checked;
   const hidePassed  = document.getElementById('f-hidepassed').checked;
   const hideRemoved = document.getElementById('f-hideremoved').checked;
+  const hideDup     = document.getElementById('f-hidedup').checked;
   const maxBike     = parseInt(_val('f-bike'), 10);
   const source      = _val('f-source');
   const pmin        = parseFloat(_val('f-pmin')) || 0;
@@ -325,6 +327,7 @@ function applyFilters() {
     const rating = c.dataset.rating || '';
     const amen = (c.dataset.amen || '').split(' ');
     if (hideRemoved && removed) show = false;
+    if (hideDup && c.dataset.dup === '1') show = false;
     if (source !== 'all' && c.dataset.source !== source) show = false;
     if (price && (price < pmin || price > pmax)) show = false;
     if (minSqft && (!sqft || sqft < minSqft)) show = false;

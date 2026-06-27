@@ -325,6 +325,8 @@ h1{{font-size:1.6em;margin-bottom:4px}}
 .media-row .thumb{{width:100%;height:210px;object-fit:cover;border-radius:0}}
 .delisted-banner{{background:#7f1d1d;color:#fff;font-size:0.7em;font-weight:700;text-transform:uppercase;letter-spacing:.05em;padding:4px 12px;text-align:center}}
 .card.delisted{{opacity:.55;filter:grayscale(.4)}}
+.dup-banner{{background:#6b7280;color:#fff;font-size:0.7em;font-weight:700;text-transform:uppercase;letter-spacing:.05em;padding:4px 12px;text-align:center}}
+.card.duplicate{{opacity:.7}}
 .minimap-wrap{{position:relative;flex:1;min-width:0}}
 .map-bubbles{{position:absolute;top:6px;right:6px;z-index:500;display:flex;flex-direction:column;gap:4px;align-items:flex-end;pointer-events:none}}
 .map-bub{{background:rgba(255,255,255,.95);border-radius:9px;padding:1px 7px;font-size:11px;font-weight:700;line-height:18px;box-shadow:0 1px 2px rgba(0,0,0,.3);white-space:nowrap}}
@@ -719,6 +721,8 @@ _EXTRA_COLUMNS = [
     ("photos",       "TEXT"),              # JSON array of all listing photo URLs
     ("amen_text",    "TEXT"),              # raw amenities text scraped from detail pages
     ("sv_heading",   "INTEGER"),           # Street View heading (deg) facing the building
+    ("duplicate",    "INTEGER DEFAULT 0"), # 1 = same address as another (kept) listing
+    ("dup_of",       "INTEGER"),           # id of the canonical listing it duplicates
 ]
 
 # Allowed user ratings, worst → best. Emoji + label drive the swipe + card buttons.
@@ -2594,7 +2598,7 @@ def row_photos(r):
     return [img] if img else []
 
 
-_UNIT_RE = re.compile(r'\b(?:unit|apt\.?|apartment|#)\s*([0-9]+[A-Za-z]?|[A-Za-z]?[0-9]+)\b', re.I)
+_UNIT_RE = re.compile(r'(?:\b(?:unit|apt|apartment)\.?\s*#?\s*|#)\s*([0-9]+[A-Za-z]?|[A-Za-z][0-9]*)\b', re.I)
 
 
 def row_unit(r):
@@ -2875,6 +2879,9 @@ def _render_card(r, is_new_today=False, interactive=False):
         is_delisted = False
     delisted_cls = " delisted" if is_delisted else ""
     delisted_banner = '<div class="delisted-banner">&#9888; REMOVED BY AUTHOR</div>' if is_delisted else ""
+    is_dup = bool(_row_get(r, "duplicate"))
+    dup_cls = " duplicate" if is_dup else ""
+    dup_banner = '<div class="dup-banner">&#128203; DUPLICATE ADDRESS</div>' if is_dup else ""
     rating = row_rating(r)
     rating_col = ""
     status_col = ""
@@ -2915,11 +2922,12 @@ def _render_card(r, is_new_today=False, interactive=False):
         f'data-beds="{_row_get(r, "beds") if _row_get(r, "beds") is not None else ""}" '
         f'data-baths="{_row_get(r, "baths") if _row_get(r, "baths") is not None else ""}" '
         f'data-sqft="{_row_get(r, "sqft") or ""}" '
-        f'data-amen="{amen_yes}"'
+        f'data-amen="{amen_yes}" data-dup="{1 if is_dup else 0}"'
     )
     return (
-        f'<div class="card {status}{house_cls}{laundry_cls}{ec_cls}{delisted_cls}" {data_attrs}>'
+        f'<div class="card {status}{house_cls}{laundry_cls}{ec_cls}{delisted_cls}{dup_cls}" {data_attrs}>'
         f'{delisted_banner}'
+        f'{dup_banner}'
         f'{banner_html}'
         f'{media_row}'
         f'<div class="card-body">'
@@ -3357,6 +3365,68 @@ def prune_removed(conn, log=print, only_active=True):
     return checked, removed
 
 
+_ADDR_SUFFIX = {
+    "street": "st", "avenue": "ave", "av": "ave", "road": "rd", "drive": "dr",
+    "lane": "ln", "boulevard": "blvd", "court": "ct", "place": "pl",
+    "terrace": "ter", "square": "sq", "parkway": "pkwy", "highway": "hwy",
+    "circle": "cir",
+}
+
+
+def _norm_addr(r):
+    """Normalized street address (+ unit) for duplicate detection, or '' when no
+    street address is present (city-only listings are never grouped)."""
+    addr = extract_address(r["location"] or "") or extract_address(r["title"] or "")
+    if not addr:
+        return ""
+    a = addr.lower().replace(".", "")
+    a = " ".join(_ADDR_SUFFIX.get(w, w) for w in a.split())
+    a = re.sub(r"[^\w ]", "", a)
+    a = re.sub(r"\s+", " ", a).strip()
+    unit = row_unit(r)
+    return f"{a} #{unit.lower()}" if unit else a
+
+
+def _completeness(r):
+    """How much real data a row carries — used to pick the canonical of a dup set."""
+    score = 0
+    for col in ("sqft", "beds", "photos", "walk_min", "amen_text"):
+        try:
+            if r[col]:
+                score += 1
+        except (KeyError, IndexError):
+            pass
+    if (r["geo_src"] or "") == "addr":
+        score += 1
+    return score
+
+
+def mark_duplicates(conn, log=print):
+    """Group active listings by normalized address and flag all but the most
+    complete in each group as duplicate (hidden in the UI). Idempotent."""
+    rows = conn.execute("SELECT * FROM listings WHERE COALESCE(delisted,0)=0").fetchall()
+    groups = {}
+    for r in rows:
+        k = _norm_addr(r)
+        if k:
+            groups.setdefault(k, []).append(r)
+    conn.execute("UPDATE listings SET duplicate=0, dup_of=NULL")
+    dups = 0
+    for g in groups.values():
+        if len(g) < 2:
+            continue
+        canon = max(g, key=lambda r: (_completeness(r), -r["id"]))
+        for r in g:
+            if r["id"] != canon["id"]:
+                conn.execute("UPDATE listings SET duplicate=1, dup_of=? WHERE id=?",
+                             (canon["id"], r["id"]))
+                dups += 1
+    conn.commit()
+    naddr = sum(1 for g in groups.values() if len(g) > 1)
+    log(f"  {dups} duplicate listing(s) across {naddr} shared address(es)")
+    return dups
+
+
 def record_scrape(conn, source, total=0, new=0, error=""):
     """Stamp the time a source was last scraped (whether or not it found
     anything), so the UI can show 'last scraped' per site."""
@@ -3665,6 +3735,15 @@ def cmd_enrich_apts(args):
     enrich_apts_details(conn, log=print, only_missing=not getattr(args, "all", False))
 
 
+def cmd_dedupe(args):
+    """Flag same-address listings as duplicates (hidden in the UI)."""
+    conn = db_connect()
+    print("Flagging duplicate listings by address...")
+    mark_duplicates(conn, log=print)
+    total = conn.execute("SELECT COUNT(*) FROM listings WHERE duplicate=1").fetchone()[0]
+    print(f"Done. {total} listing(s) flagged as duplicates.")
+
+
 def cmd_prune(args):
     """Check listing URLs and flag the ones removed by the author (hidden in UI)."""
     conn = db_connect()
@@ -3834,6 +3913,13 @@ def cmd_daily(args):
     except Exception as e:
         print(f"     removal check failed: {e}")
 
+    # ── Flag same-address duplicates (hidden in the UI) ──
+    print("Flagging duplicate listings...")
+    try:
+        mark_duplicates(conn, log=lambda m: print(f"     {m}"))
+    except Exception as e:
+        print(f"     dedupe failed: {e}")
+
     # ── Commute times for new listings ──
     try:
         compute_missing_commutes(conn, log=lambda m: print(f"     {m}"))
@@ -3987,6 +4073,7 @@ def main():
     sub.add_parser("enrich-apts").add_argument("--all", action="store_true",
                                                help="re-fetch all (default: only rows missing sqft)")
     sub.add_parser("prune")
+    sub.add_parser("dedupe")
     sub.add_parser("update")
     sub.add_parser("html")
     _daily = sub.add_parser("daily")
@@ -4034,6 +4121,7 @@ def main():
         "fetch-hotpads": cmd_fetch_hotpads,
         "enrich-apts": cmd_enrich_apts,
         "prune":      cmd_prune,
+        "dedupe":     cmd_dedupe,
         "update":     cmd_update,
         "html":       cmd_html,
         "daily":      cmd_daily,
