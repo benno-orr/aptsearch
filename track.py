@@ -3135,10 +3135,11 @@ def backfill_listing_dates(conn, results):
     for r in results:
         listed = r.get("_listed_on")
         avail  = r.get("_avail")
-        if not listed and not avail:
+        photos = r.get("_photos")
+        if not listed and not avail and not photos:
             continue
         row = conn.execute(
-            "SELECT id, listed_on, available FROM listings WHERE url=?", (r["url"],)
+            "SELECT id, listed_on, available, photos FROM listings WHERE url=?", (r["url"],)
         ).fetchone()
         if not row:
             continue
@@ -3147,6 +3148,8 @@ def backfill_listing_dates(conn, results):
             sets.append("listed_on=?"); params.append(listed)
         if avail and not (row["available"] or ""):
             sets.append("available=?"); params.append(avail)
+        if photos and not (row["photos"] or ""):
+            sets.append("photos=?"); params.append(_json.dumps(photos))
         if not sets:
             continue
         params.append(row["id"])
