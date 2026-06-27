@@ -163,6 +163,8 @@ _CONTROLS = """
         <input type="number" id="f-pmax" placeholder="max" oninput="applyFilters()" style="width:78px"></div>
       <div class="fp-row"><label>min sqft</label>
         <input type="number" id="f-sqft" placeholder="any" oninput="applyFilters()" style="width:78px"></div>
+      <div class="fp-row"><label>move-in by</label>
+        <input type="date" id="f-movein" onchange="applyFilters()"></div>
       <div class="fp-row"><label>baths</label>
         <select id="f-baths" onchange="applyFilters()">
           <option value="0">any</option><option value="1">1+</option>
@@ -313,6 +315,7 @@ function applyFilters() {
   const pmin        = parseFloat(_val('f-pmin')) || 0;
   const pmax        = parseFloat(_val('f-pmax')) || Infinity;
   const minSqft     = parseFloat(_val('f-sqft')) || 0;
+  const moveinBy    = _val('f-movein');
   const minBaths    = parseFloat(_val('f-baths')) || 0;
   const wantRatings = _checked('.f-rate');
   const wantAmen    = _checked('.f-amen');
@@ -331,6 +334,8 @@ function applyFilters() {
     if (source !== 'all' && c.dataset.source !== source) show = false;
     if (price && (price < pmin || price > pmax)) show = false;
     if (minSqft && (!sqft || sqft < minSqft)) show = false;
+    // move-in by: hide listings available only after the chosen date (unknown kept)
+    if (moveinBy && c.dataset.movein && c.dataset.movein > moveinBy) show = false;
     if (minBaths && (!baths || baths < minBaths)) show = false;
     if (wantRatings.length && !wantRatings.includes(rating)) show = false;
     if (wantAmen.length && !wantAmen.every(a => amen.includes(a))) show = false;
@@ -483,7 +488,11 @@ document.addEventListener('keydown', function(e) {
   else return;
   e.preventDefault();
 });
-window.addEventListener('DOMContentLoaded', applyFilters);
+window.addEventListener('DOMContentLoaded', function() {
+  const mi = document.getElementById('f-movein');
+  if (mi) { mi.min = new Date().toISOString().slice(0,10); }  // calendar starts at today
+  applyFilters();
+});
 </script>
 """
 

@@ -187,6 +187,33 @@ def parse_move_in(value):
     return ""
 
 
+def movein_iso(avail):
+    """Stored move-in display ('Sep 1', 'Now', '') → ISO date for filtering, or ''.
+    'Now'/blank → '' (no constraint). A bare month/day gets the soonest future
+    year (this year, or next if already past)."""
+    if not avail:
+        return ""
+    s = avail.strip().lower()
+    if "now" in s:
+        return ""
+    m = re.match(r'([a-z]{3,4})\s*(\d{0,2})', s)
+    mo = _MONTH_NUM.get(m.group(1)) if m else None
+    if not mo:
+        return ""
+    day = int(m.group(2)) if (m and m.group(2)) else 1
+    today = datetime.now().date()
+    try:
+        d = today.replace(year=today.year, month=mo, day=day)
+    except ValueError:
+        return ""
+    if d < today:
+        try:
+            d = d.replace(year=today.year + 1)
+        except ValueError:
+            return ""
+    return d.isoformat()
+
+
 def row_available(r):
     try:
         return r["available"] or ""
@@ -334,9 +361,7 @@ h1{{font-size:1.6em;margin-bottom:4px}}
 .bub-transit{{color:#6d28d9;border:1px solid #7c3aed}}
 .bub-bike{{color:#c2410c;border:1px solid #ea580c}}
 .media-split{{display:flex;gap:6px}}
-.media-split > *{{min-width:0}}
-.media-split > .sv-link{{flex:2}}
-.media-split > .minimap-wrap{{flex:1}}
+.media-split > *{{flex:1;min-width:0}}
 .media-row .minimap{{width:100%;height:180px;aspect-ratio:auto;margin:0;border-radius:0}}
 .media-row .sv-link{{display:block;width:100%;line-height:0;position:relative}}
 .media-row .streetview{{width:100%;height:180px;object-fit:cover;border-radius:0}}
@@ -457,9 +482,8 @@ h1{{font-size:1.6em;margin-bottom:4px}}
 .cm{{display:flex;align-items:center;gap:8px;height:20px;font-size:0.86em;font-weight:700;line-height:1}}
 .cm-ico{{font-size:1.1em;width:1.4em;text-align:center}}
 .cm-walk{{color:#16a34a}}
-.cm-bike{{color:#ec4899}}
-.cm-subway{{color:#7c3aed}}
-.cm-bus{{color:#ca8a04}}
+.cm-bike{{color:#16a34a}}
+.cm-transit{{color:#7c3aed}}
 .empty{{color:#aaa;font-style:italic;padding:12px 0}}
 .pref-note{{background:#fffbeb;border:1px solid #fcd34d;border-radius:8px;padding:10px 14px;font-size:0.85em;color:#92400e;margin-bottom:20px}}
 .links{{display:grid;grid-template-columns:1fr 1fr;gap:4px 24px;margin-bottom:8px}}
@@ -2369,10 +2393,12 @@ def row_commute_col(r):
     except (KeyError, IndexError):
         bus = None
     approx = "~" if src != "addr" else ""
-    items = [("&#128694;", w, "cm-walk"), ("&#128692;", b, "cm-bike"),  # 🚶 green, 🚴 pink
-             ("&#128647;", t, "cm-subway")]                              # 🚇
-    if bus is not None:
-        items.append(("&#128652;", bus, "cm-bus"))                               # 🚌
+    items = [("&#128694;", w, "cm-walk"), ("&#128692;", b, "cm-bike")]   # 🚶 / 🚴 — green
+    # only the faster public-transit option (subway vs bus), in purple
+    cands = [(x, e) for x, e in ((t, "&#128647;"), (bus, "&#128652;")) if x is not None]
+    if cands:
+        tm, te = min(cands, key=lambda x: x[0])
+        items.append((te, tm, "cm-transit"))                            # 🚇/🚌 — purple
     rows = "".join(
         f'<div class="cm {cls}"><span class="cm-ico">{ic}</span>{approx}{m}m</div>'
         for ic, m, cls in items
@@ -2792,30 +2818,16 @@ def _render_card(r, is_new_today=False, interactive=False, units=None):
             except (KeyError, IndexError):
                 return None
         walk_min = _g("walk_min")
-        # fastest public-transit option (subway vs bus), shown only if its time
-        # differs from the walk time
-        cands = [(t, m, e) for t, m, e in
-                 ((_g("transit_min"), "subway", "🚇"), (_g("bus_min"), "bus", "🚌"))
-                 if t is not None]
+        # faster public-transit option (subway vs bus) → purple line on the map
+        cands = [(t, m) for t, m in
+                 ((_g("transit_min"), "subway"), (_g("bus_min"), "bus")) if t is not None]
         transit = min(cands, key=lambda x: x[0]) if cands else None
         show_transit = bool(transit and walk_min is not None and transit[0] != walk_min)
-
-        walk_attr = f' data-walk="{walk_min}"' if walk_min is not None else ""
-        transit_attr = (f' data-transit="{transit[0]}" data-tmode="{transit[1]}"'
-                        if show_transit else "")
-        bike_min = _g("bike_min")
-        bubbles = ""
-        if walk_min is not None:
-            bubbles += f'<span class="map-bub bub-walk">🚶 {walk_min} min</span>'
-        if show_transit:
-            bubbles += f'<span class="map-bub bub-transit">{transit[2]} {transit[0]} min</span>'
-        if bike_min is not None:
-            bubbles += f'<span class="map-bub bub-bike">🚴 {bike_min} min</span>'
+        transit_attr = f' data-tmode="{transit[1]}"' if show_transit else ""
         minimap_html = (
             f'<div class="minimap-wrap">'
             f'<div class="minimap" data-lat="{r["lat"]}" data-lon="{r["lon"]}" '
-            f'data-approx="{approx}"{walk_attr}{transit_attr}{routes_attr}></div>'
-            f'<div class="map-bubbles">{bubbles}</div>'
+            f'data-approx="{approx}"{transit_attr}{routes_attr}></div>'
             f'</div>'
         )
     else:
@@ -2951,7 +2963,8 @@ def _render_card(r, is_new_today=False, interactive=False, units=None):
         f'data-beds="{_row_get(r, "beds") if _row_get(r, "beds") is not None else ""}" '
         f'data-baths="{_row_get(r, "baths") if _row_get(r, "baths") is not None else ""}" '
         f'data-sqft="{_row_get(r, "sqft") or ""}" '
-        f'data-amen="{amen_yes}" data-dup="{1 if is_dup else 0}"'
+        f'data-amen="{amen_yes}" data-dup="{1 if is_dup else 0}" '
+        f'data-movein="{movein_iso(avail)}"'
     )
     return (
         f'<div class="card {status}{house_cls}{laundry_cls}{ec_cls}{delisted_cls}{dup_cls}" {data_attrs}>'
