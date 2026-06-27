@@ -325,8 +325,11 @@ h1{{font-size:1.6em;margin-bottom:4px}}
 .media-row .thumb{{width:100%;height:210px;object-fit:cover;border-radius:0}}
 .delisted-banner{{background:#7f1d1d;color:#fff;font-size:0.7em;font-weight:700;text-transform:uppercase;letter-spacing:.05em;padding:4px 12px;text-align:center}}
 .card.delisted{{opacity:.55;filter:grayscale(.4)}}
-.walk-lbl{{background:rgba(255,255,255,.92);color:#15803d;font-size:11px;font-weight:700;
-  border:1px solid #16a34a;border-radius:9px;padding:0 5px;line-height:18px;text-align:center;white-space:nowrap;box-shadow:0 1px 2px rgba(0,0,0,.2)}}
+.minimap-wrap{{position:relative;flex:1;min-width:0}}
+.map-bubbles{{position:absolute;top:6px;right:6px;z-index:500;display:flex;flex-direction:column;gap:4px;align-items:flex-end;pointer-events:none}}
+.map-bub{{background:rgba(255,255,255,.95);border-radius:9px;padding:1px 7px;font-size:11px;font-weight:700;line-height:18px;box-shadow:0 1px 2px rgba(0,0,0,.3);white-space:nowrap}}
+.bub-walk{{color:#15803d;border:1px solid #16a34a}}
+.bub-transit{{color:#6d28d9;border:1px solid #7c3aed}}
 .media-split{{display:flex;gap:6px}}
 .media-split > *{{flex:1;min-width:0}}
 .media-row .minimap{{width:100%;height:180px;aspect-ratio:auto;margin:0;border-radius:0}}
@@ -375,10 +378,14 @@ h1{{font-size:1.6em;margin-bottom:4px}}
 .rate-row{{flex-direction:row;flex-wrap:wrap}}
 .rate{{border:1px solid #d1d5db;background:#fff;border-radius:6px;padding:3px 8px;font-size:0.78em;cursor:pointer;color:#374151;white-space:nowrap}}
 .rate:hover{{background:#f3f4f6}}
-.rate-nice.rated-on{{background:#dcfce7;border-color:#16a34a;color:#166534;font-weight:700}}
-.rate-mid.rated-on{{background:#fef3c7;border-color:#f59e0b;color:#92400e;font-weight:700}}
-.rate-no.rated-on{{background:#fee2e2;border-color:#ef4444;color:#991b1b;font-weight:700}}
-.card[data-rating="nice"]{{box-shadow:0 0 0 2px #16a34a inset}}
+.rate{{font-size:1.05em;padding:2px 9px}}
+.rate-love.rated-on{{background:#dcfce7;border-color:#16a34a}}
+.rate-ok.rated-on{{background:#d1fae5;border-color:#10b981}}
+.rate-hmm.rated-on{{background:#fef3c7;border-color:#f59e0b}}
+.rate-no.rated-on{{background:#fee2e2;border-color:#ef4444}}
+.rate.rated-on{{font-weight:700;transform:scale(1.12)}}
+.card[data-rating="love"]{{box-shadow:0 0 0 2px #16a34a inset}}
+.card[data-rating="ok"]{{box-shadow:0 0 0 2px #10b981 inset}}
 .controls{{background:#fff;border-radius:10px;padding:12px 16px;box-shadow:0 1px 4px rgba(0,0,0,.08);margin-bottom:20px;display:flex;flex-wrap:wrap;gap:14px;align-items:center;font-size:0.88em}}
 .controls label{{display:flex;align-items:center;gap:5px;cursor:pointer}}
 .controls .spacer{{flex:1}}
@@ -521,16 +528,15 @@ table.ss td.new-count{{font-weight:700;color:#166534}}
         if (pts && pts.length > 1)
           L.polyline(shift(pts, k), {{color:color, weight:W, opacity:1}}).addTo(map);
       }}
-      line(routes.walk, '#16a34a', 0);               // 🚶 green — walking route only
-      // annotate the walk time at the midpoint of the walking route
-      var walkMin = el.dataset.walk;
-      if (walkMin) {{
-        var wpts = (routes.walk && routes.walk.length > 1) ? routes.walk : [[lat, lon], BROAD];
-        var mid = wpts[Math.floor(wpts.length / 2)];
-        L.marker(mid, {{interactive:false, keyboard:false, icon: L.divIcon({{
-          className:'walk-lbl', iconSize:[64,20], iconAnchor:[32,10],
-          html:'\\uD83D\\uDEB6 ' + walkMin + ' min'}})}}).addTo(map);
+      function drawTransit(segs, color, k) {{
+        if (!segs || !segs.length) return;
+        if (Array.isArray(segs[0])) {{ line(segs, color, k); return; }}
+        segs.forEach(function(s) {{ line(s.pts, color, k); }});
       }}
+      line(routes.walk, '#16a34a', 0);               // 🚶 green walking route
+      // fastest public-transit route in purple (only when it differs from walk)
+      var tmode = el.dataset.tmode;
+      if (tmode && routes[tmode]) drawTransit(routes[tmode], '#7c3aed', 0);
       el.title = approx ? 'Approximate location (geocoded from area)' : 'Exact location';
       el.addEventListener('click', function(){{
         window.open('https://www.openstreetmap.org/?mlat='+lat+'&mlon='+lon+'#map=16/'+lat+'/'+lon, '_blank');
@@ -658,10 +664,13 @@ _EXTRA_COLUMNS = [
     ("beds",         "REAL"),              # bedrooms (from listing detail page)
     ("baths",        "REAL"),              # bathrooms
     ("sqft",         "INTEGER"),           # square feet
+    ("photos",       "TEXT"),              # JSON array of all listing photo URLs
+    ("amen_text",    "TEXT"),              # raw amenities text scraped from detail pages
 ]
 
-# Allowed user ratings, worst → best (also the swipe-left/up/right order).
-RATINGS = ["no", "mid", "nice"]
+# Allowed user ratings, worst → best. Emoji + label drive the swipe + card buttons.
+RATINGS = ["no", "hmm", "ok", "love"]
+RATING_EMOJI = {"no": "😤", "hmm": "🤔", "ok": "😊", "love": "😍"}
 
 
 def _db_init_schema(conn):
@@ -2548,14 +2557,34 @@ def _render_card(r, is_new_today=False, interactive=False):
         except (KeyError, IndexError):
             rg = ""
         routes_attr = f" data-routes='{rg}'" if rg else ""
-        try:
-            walk_min = r["walk_min"]
-        except (KeyError, IndexError):
-            walk_min = None
+        def _g(k):
+            try:
+                return r[k]
+            except (KeyError, IndexError):
+                return None
+        walk_min = _g("walk_min")
+        # fastest public-transit option (subway vs bus), shown only if its time
+        # differs from the walk time
+        cands = [(t, m, e) for t, m, e in
+                 ((_g("transit_min"), "subway", "🚇"), (_g("bus_min"), "bus", "🚌"))
+                 if t is not None]
+        transit = min(cands, key=lambda x: x[0]) if cands else None
+        show_transit = bool(transit and walk_min is not None and transit[0] != walk_min)
+
         walk_attr = f' data-walk="{walk_min}"' if walk_min is not None else ""
+        transit_attr = (f' data-transit="{transit[0]}" data-tmode="{transit[1]}"'
+                        if show_transit else "")
+        bubbles = ""
+        if walk_min is not None:
+            bubbles += f'<span class="map-bub bub-walk">🚶 {walk_min} min</span>'
+        if show_transit:
+            bubbles += f'<span class="map-bub bub-transit">{transit[2]} {transit[0]} min</span>'
         minimap_html = (
+            f'<div class="minimap-wrap">'
             f'<div class="minimap" data-lat="{r["lat"]}" data-lon="{r["lon"]}" '
-            f'data-approx="{approx}"{walk_attr}{routes_attr}></div>'
+            f'data-approx="{approx}"{walk_attr}{transit_attr}{routes_attr}></div>'
+            f'<div class="map-bubbles">{bubbles}</div>'
+            f'</div>'
         )
     else:
         minimap_html = ""
@@ -2645,9 +2674,10 @@ def _render_card(r, is_new_today=False, interactive=False):
             f'</div>'
             f'<div class="ac-h ac-h-rate">Rating</div>'
             f'<div class="actions rate-row">'
-            f'<button class="rate rate-nice{_ron("nice")}" onclick="setRating({rid},\'nice\')">😍 nice</button>'
-            f'<button class="rate rate-mid{_ron("mid")}" onclick="setRating({rid},\'mid\')">😐 mid</button>'
-            f'<button class="rate rate-no{_ron("no")}" onclick="setRating({rid},\'no\')">👎 no</button>'
+            f'<button class="rate rate-love{_ron("love")}" onclick="setRating({rid},\'love\')">😍</button>'
+            f'<button class="rate rate-ok{_ron("ok")}" onclick="setRating({rid},\'ok\')">😊</button>'
+            f'<button class="rate rate-hmm{_ron("hmm")}" onclick="setRating({rid},\'hmm\')">🤔</button>'
+            f'<button class="rate rate-no{_ron("no")}" onclick="setRating({rid},\'no\')">😤</button>'
             f'</div></div>'
         )
     amen_commute_html = (
