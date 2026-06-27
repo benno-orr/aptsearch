@@ -2776,13 +2776,24 @@ def _render_card(r, is_new_today=False, interactive=False):
         )
     else:
         rating_col = ""
+    amen = row_amenities(r)
     amen_commute_html = (
         f'<div class="amen-commute">'
         f'<div class="ac-col"><div class="ac-h">Amenities</div>{amen_html}</div>'
         f'{commute_block}{actions_col}</div>'
     )
+    amen_yes = " ".join(k for k, v in amen.items() if v == "yes")
+    data_attrs = (
+        f'data-id="{r["id"]}" data-bike="{_row_bike(r)}" data-source="{src}" '
+        f'data-rating="{rating}" data-delisted="{1 if is_delisted else 0}" '
+        f'data-price="{r["price"] or 0}" '
+        f'data-beds="{_row_get(r, "beds") if _row_get(r, "beds") is not None else ""}" '
+        f'data-baths="{_row_get(r, "baths") if _row_get(r, "baths") is not None else ""}" '
+        f'data-sqft="{_row_get(r, "sqft") or ""}" '
+        f'data-amen="{amen_yes}"'
+    )
     return (
-        f'<div class="card {status}{house_cls}{laundry_cls}{ec_cls}{delisted_cls}" data-id="{r["id"]}" data-bike="{_row_bike(r)}" data-source="{src}" data-rating="{rating}" data-delisted="{1 if is_delisted else 0}">'
+        f'<div class="card {status}{house_cls}{laundry_cls}{ec_cls}{delisted_cls}" {data_attrs}>'
         f'{delisted_banner}'
         f'{rating_col}'
         f'{banner_html}'

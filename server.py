@@ -145,30 +145,53 @@ def _run_refresh(source):
 
 _CONTROLS = """
 <div class="controls">
-  <strong>Filters:</strong>
-  <label>source:
-    <select id="f-source" onchange="applyFilters()">
-      <option value="all" selected>all</option>
-      <option value="craigslist">Craigslist</option>
-      <option value="apartments">Apartments.com</option>
-      <option value="zillow">Zillow</option>
-      <option value="rent">Rent.com</option>
-      <option value="hotpads">HotPads</option>
-      <option value="facebook">Facebook</option>
-    </select>
-  </label>
-  <label>max bike:
-    <select id="f-bike" onchange="applyFilters()">
-      <option value="10">10 min</option>
-      <option value="15" selected>15 min</option>
-      <option value="20">20 min</option>
-      <option value="999">any</option>
-    </select>
-  </label>
-  <label><input type="checkbox" id="f-house" onchange="applyFilters()"> house units only</label>
-  <label><input type="checkbox" id="f-laundry" onchange="applyFilters()"> in-unit laundry only</label>
-  <label><input type="checkbox" id="f-hidepassed" checked onchange="applyFilters()"> hide passed</label>
-  <label><input type="checkbox" id="f-hideremoved" checked onchange="applyFilters()"> hide removed</label>
+  <div class="filters-dd">
+    <button class="btn-filters" onclick="toggleFilters()">⚙ Filters ▾</button>
+    <div class="filters-panel" id="filters-panel">
+      <div class="fp-row"><label>source</label>
+        <select id="f-source" onchange="applyFilters()">
+          <option value="all" selected>all</option>
+          <option value="craigslist">Craigslist</option>
+          <option value="apartments">Apartments.com</option>
+          <option value="zillow">Zillow</option>
+          <option value="rent">Rent.com</option>
+          <option value="hotpads">HotPads</option>
+          <option value="facebook">Facebook</option>
+        </select></div>
+      <div class="fp-row"><label>price /mo</label>
+        <input type="number" id="f-pmin" placeholder="min" oninput="applyFilters()" style="width:78px">
+        <input type="number" id="f-pmax" placeholder="max" oninput="applyFilters()" style="width:78px"></div>
+      <div class="fp-row"><label>min sqft</label>
+        <input type="number" id="f-sqft" placeholder="any" oninput="applyFilters()" style="width:78px"></div>
+      <div class="fp-row"><label>baths</label>
+        <select id="f-baths" onchange="applyFilters()">
+          <option value="0">any</option><option value="1">1+</option>
+          <option value="1.5">1.5+</option><option value="2">2+</option>
+        </select></div>
+      <div class="fp-row"><label>max bike</label>
+        <select id="f-bike" onchange="applyFilters()">
+          <option value="10">10 min</option><option value="15" selected>15 min</option>
+          <option value="20">20 min</option><option value="999">any</option>
+        </select></div>
+      <div class="fp-row"><label>rating</label>
+        <label class="cbx"><input type="checkbox" class="f-rate" value="love" onchange="applyFilters()">😍</label>
+        <label class="cbx"><input type="checkbox" class="f-rate" value="ok" onchange="applyFilters()">😊</label>
+        <label class="cbx"><input type="checkbox" class="f-rate" value="hmm" onchange="applyFilters()">🤔</label>
+        <label class="cbx"><input type="checkbox" class="f-rate" value="no" onchange="applyFilters()">😤</label>
+        <label class="cbx"><input type="checkbox" class="f-rate" value="" onchange="applyFilters()">unrated</label></div>
+      <div class="fp-row"><label>amenities</label>
+        <label class="cbx"><input type="checkbox" class="f-amen" value="laundry" onchange="applyFilters()">🧺 laundry</label>
+        <label class="cbx"><input type="checkbox" class="f-amen" value="parking" onchange="applyFilters()">🚗 parking</label>
+        <label class="cbx"><input type="checkbox" class="f-amen" value="wifi" onchange="applyFilters()">📶 wifi</label>
+        <label class="cbx"><input type="checkbox" class="f-amen" value="heat" onchange="applyFilters()">🔥 heat</label>
+        <label class="cbx"><input type="checkbox" class="f-amen" value="dishwasher" onchange="applyFilters()">🍽 dish</label></div>
+      <div class="fp-row">
+        <label class="cbx"><input type="checkbox" id="f-house" onchange="applyFilters()"> house only</label>
+        <label class="cbx"><input type="checkbox" id="f-hidepassed" checked onchange="applyFilters()"> hide passed</label>
+        <label class="cbx"><input type="checkbox" id="f-hideremoved" checked onchange="applyFilters()"> hide removed</label></div>
+    </div>
+  </div>
+  <input type="checkbox" id="f-laundry" style="display:none">
   <span id="f-hidden-count" style="color:#999"></span>
   <button class="btn-swipe" onclick="openSwipe()">▶ Swipe mode</button>
   <span class="spacer"></span>
@@ -184,6 +207,16 @@ _CONTROLS = """
 <style>
 .btn-swipe{background:#4f46e5;color:#fff;border:none;border-radius:8px;padding:6px 14px;font-size:0.9em;font-weight:600;cursor:pointer}
 .btn-swipe:hover{background:#4338ca}
+.filters-dd{position:relative;display:inline-block}
+.btn-filters{background:#fff;border:1px solid #d1d5db;border-radius:8px;padding:6px 14px;font-size:0.9em;font-weight:600;cursor:pointer}
+.btn-filters:hover{background:#f3f4f6}
+.filters-panel{display:none;position:absolute;top:110%;left:0;z-index:900;background:#fff;border:1px solid #e5e7eb;border-radius:10px;box-shadow:0 8px 30px rgba(0,0,0,.18);padding:12px 14px;min-width:330px}
+.filters-panel.open{display:block}
+.fp-row{display:flex;align-items:center;flex-wrap:wrap;gap:8px;padding:5px 0;border-bottom:1px solid #f3f4f6}
+.fp-row:last-child{border-bottom:none}
+.fp-row>label:first-child{width:74px;font-size:0.8em;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.03em}
+.fp-row .cbx{display:inline-flex;align-items:center;gap:3px;font-size:0.9em;font-weight:500;cursor:pointer;width:auto;text-transform:none;letter-spacing:0;color:#374151}
+.fp-row input[type=number],.fp-row select{border:1px solid #d1d5db;border-radius:6px;padding:3px 6px;font-size:0.85em}
 #swipe-overlay{display:none;position:fixed;inset:0;background:rgba(17,24,39,.92);z-index:1000;
   flex-direction:column;align-items:center;justify-content:flex-start;padding:18px;overflow:auto}
 #swipe-overlay.open{display:flex}
@@ -260,31 +293,46 @@ async function addNote(id) {
     body: JSON.stringify({id:id, text:text})});
   location.reload();
 }
+function toggleFilters() {
+  document.getElementById('filters-panel').classList.toggle('open');
+}
+const _val = id => document.getElementById(id).value;
+const _checked = sel => Array.from(document.querySelectorAll(sel)).filter(b=>b.checked).map(b=>b.value);
 function applyFilters() {
   const houseOnly   = document.getElementById('f-house').checked;
-  const laundryOnly = document.getElementById('f-laundry').checked;
   const hidePassed  = document.getElementById('f-hidepassed').checked;
   const hideRemoved = document.getElementById('f-hideremoved').checked;
-  const maxBike     = parseInt(document.getElementById('f-bike').value, 10);
-  const source      = document.getElementById('f-source').value;
+  const maxBike     = parseInt(_val('f-bike'), 10);
+  const source      = _val('f-source');
+  const pmin        = parseFloat(_val('f-pmin')) || 0;
+  const pmax        = parseFloat(_val('f-pmax')) || Infinity;
+  const minSqft     = parseFloat(_val('f-sqft')) || 0;
+  const minBaths    = parseFloat(_val('f-baths')) || 0;
+  const wantRatings = _checked('.f-rate');
+  const wantAmen    = _checked('.f-amen');
   let hiddenFar = 0;
   document.querySelectorAll('.card').forEach(c => {
     let show = true;
     const bike = parseInt(c.dataset.bike || '998', 10);
     const removed = c.dataset.delisted === '1';
-    // source filter takes precedence — when isolating one site, ignore the bike cap
-    if (source !== 'all') {
-      c.style.display = ((c.dataset.source === source) && !(hideRemoved && removed)) ? '' : 'none';
-      return;
-    }
+    const price = parseFloat(c.dataset.price) || 0;
+    const sqft = parseFloat(c.dataset.sqft) || 0;
+    const baths = parseFloat(c.dataset.baths) || 0;
+    const rating = c.dataset.rating || '';
+    const amen = (c.dataset.amen || '').split(' ');
     if (hideRemoved && removed) show = false;
-    // 998 = commute unknown — always shown; East Cambridge never distance-hidden
-    if (bike !== 998 && bike > maxBike && !c.classList.contains('east-cam')) {
+    if (source !== 'all' && c.dataset.source !== source) show = false;
+    if (price && (price < pmin || price > pmax)) show = false;
+    if (minSqft && (!sqft || sqft < minSqft)) show = false;
+    if (minBaths && (!baths || baths < minBaths)) show = false;
+    if (wantRatings.length && !wantRatings.includes(rating)) show = false;
+    if (wantAmen.length && !wantAmen.every(a => amen.includes(a))) show = false;
+    // bike cap only when not isolating a source; EC never distance-hidden
+    if (source === 'all' && bike !== 998 && bike > maxBike && !c.classList.contains('east-cam')) {
       show = false; hiddenFar++;
     }
-    if (houseOnly   && !c.classList.contains('is-house'))    show = false;
-    if (laundryOnly && !c.classList.contains('has-laundry')) show = false;
-    if (hidePassed  &&  c.classList.contains('passed'))      show = false;
+    if (houseOnly && !c.classList.contains('is-house')) show = false;
+    if (hidePassed && c.classList.contains('passed')) show = false;
     c.style.display = show ? '' : 'none';
   });
   document.getElementById('f-hidden-count').textContent =
