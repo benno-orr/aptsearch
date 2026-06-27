@@ -436,7 +436,7 @@ function swipeStreetView(m) {
   const cap = document.createElement('span'); cap.className='sv-cap'; cap.textContent='📷 Street View'; el.appendChild(cap);
   // 180° sweep centered on the building, in 5° steps (base-90 … base+90)
   const base = (m.sv_heading == null) ? 0 : m.sv_heading;
-  const offsets = []; for (let o = -90; o <= 90; o += 15) offsets.push(o);
+  const offsets = []; for (let o = -90; o <= 90; o += 10) offsets.push(o);
   const heads = offsets.map(o => (base + o + 360) % 360);
   function url(h) {
     let s = 'https://maps.googleapis.com/maps/api/streetview?size=640x360&location='+m.sv_lat+','+m.sv_lon+

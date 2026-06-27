@@ -564,7 +564,7 @@ table.ss td.new-count{{font-weight:700;color:#166534}}
 
   // Street View pan on the grid: animate a 180° sweep (15° steps, pauses at the
   // ends) only while the card is on screen, to limit Static API requests.
-  var svOffsets = []; for (var o = -90; o <= 90; o += 15) svOffsets.push(o);
+  var svOffsets = []; for (var o = -90; o <= 90; o += 10) svOffsets.push(o);
   function svBaseUrl(src) {{ return src.replace(/&heading=\\d+/, ''); }}
   // fixed time per frame by section: slower middle third, faster outer thirds
   function svDwell(idx, n) {{ var p = idx/(n-1); return (p >= 1/3 && p <= 2/3) ? 300 : 190; }}
@@ -1748,6 +1748,18 @@ async def _scrape_hotpads_pw():
 
 # ── Facebook Marketplace scraper ──────────────────────────────────────────────
 
+_STREET_RE = re.compile(
+    r'\b(\d{1,5}\s+[A-Z][A-Za-z.]*(?:\s+[A-Z][A-Za-z.]*){0,3}\s+'
+    r'(?:St|Street|Ave|Avenue|Rd|Road|Dr|Drive|Ln|Lane|Blvd|Boulevard|Ct|Court|'
+    r'Pl|Place|Ter|Terrace|Way|Sq|Square|Pkwy|Hwy|Cir|Circle|Row))\b\.?')
+
+
+def extract_address(text):
+    """First street address found in free text (e.g. '111 Sciarappa St'), or ''."""
+    m = _STREET_RE.search(text or "")
+    return m.group(1).strip().rstrip(".") if m else ""
+
+
 async def _scrape_fb_pw():
     """Scrape Facebook Marketplace using a PERSISTENT browser profile.
 
@@ -1841,6 +1853,27 @@ async def _scrape_fb_pw():
                 })
             except Exception:
                 continue
+
+        # The card only shows the city; open each post and pull the street
+        # address from its description (improves geocoding + the area filter).
+        if results:
+            print(f"  [FB] reading {len(results)} post(s) for street addresses...")
+            got = 0
+            for r in results:
+                try:
+                    await page.goto(r["url"], wait_until="domcontentloaded", timeout=30000)
+                    await page.wait_for_timeout(1200)
+                    body = await page.inner_text("body")
+                    addr = extract_address(body)
+                    if addr:
+                        city = (r.get("location") or "").strip()
+                        r["location"] = (f"{addr}, {city}"
+                                         if city and addr.lower() not in city.lower()
+                                         else addr)
+                        got += 1
+                except Exception:
+                    continue
+            print(f"  [FB] found street addresses for {got}/{len(results)}")
 
         await ctx.close()
         total = len(results)
@@ -2397,7 +2430,12 @@ def classify_neighborhood(r):
 
 
 def row_unit_type(r):
+    if is_shared((r["title"] or "") + " " + (r["location"] or "")):
+        return "room"
     return "house" if row_is_house(r) else "apt"
+
+
+_UTYPE_EMOJI = {"house": "🏠", "apt": "🏢", "room": "🚪"}
 
 
 # Amenity detection from the (limited) listing text we capture — title + location.
@@ -2777,7 +2815,7 @@ def _render_card(r, is_new_today=False, interactive=False):
     price_line = (
         f'<div class="price-line">'
         f'<a href="{r["url"]}" target="_blank">{price_str}<span class="permo">/mo</span></a>'
-        f'<span class="utype utype-{unit_type} pl-utype">{unit_type}</span>'
+        f'<span class="utype utype-{unit_type} pl-utype" title="{unit_type}">{_UTYPE_EMOJI.get(unit_type, unit_type)}</span>'
         f'{avail_pl}</div>'
     )
     specs_html = row_specs_html(r)
@@ -2857,7 +2895,7 @@ def _render_card(r, is_new_today=False, interactive=False):
         # Bottom row of "how much I like" emojis; ❌ rejects + hides immediately.
         rating_col = (
             f'<div class="rating-row">'
-            f'<button class="rate rate-pass" title="pass / hide" onclick="passHide({rid},\'passed\')">❌</button>'
+            f'<button class="rate rate-pass" title="pass / hide" onclick="passHide({rid},\'passed\')">😡</button>'
             f'<button class="rate rate-hmm{_ron("hmm")}" title="maybe" onclick="setRating({rid},\'hmm\')">🤔</button>'
             f'<button class="rate rate-ok{_ron("ok")}" title="yes" onclick="setRating({rid},\'ok\')">😊</button>'
             f'<button class="rate rate-love{_ron("love")}" title="love" onclick="setRating({rid},\'love\')">😍</button>'
