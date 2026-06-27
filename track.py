@@ -338,14 +338,14 @@ h1{{font-size:1.6em;margin-bottom:4px}}
 .media-row .streetview{{width:100%;height:180px;object-fit:cover;border-radius:0}}
 .sv-tag{{position:absolute;left:8px;bottom:8px;background:rgba(0,0,0,.6);color:#fff;font-size:0.66em;font-weight:700;padding:2px 7px;border-radius:6px;line-height:1.4}}
 .card{{position:relative;background:#fff;border-radius:10px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08);border-left:4px solid #e5e7eb}}
-.rating-col{{position:absolute;top:8px;right:8px;z-index:600;display:flex;flex-direction:column;gap:6px}}
-.rating-col .rate{{font-size:1.5em;line-height:1;width:46px;height:46px;border-radius:12px;border:2px solid transparent;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0;opacity:.8;transition:transform .08s}}
-.rating-col .rate:hover{{opacity:1;transform:scale(1.08)}}
-.rating-col .rate-no{{background:#fecaca}}
-.rating-col .rate-hmm{{background:#fef08a}}
-.rating-col .rate-ok{{background:#bbf7d0}}
-.rating-col .rate-love{{background:#fbcfe8}}
-.rating-col .rate.rated-on{{opacity:1;border-color:#111;transform:scale(1.12);box-shadow:0 2px 8px rgba(0,0,0,.3)}}
+.rating-row{{display:flex;gap:10px;justify-content:center;margin-top:12px;padding-top:10px;border-top:1px solid #f3f4f6}}
+.rating-row .rate{{font-size:1.6em;line-height:1;width:54px;height:48px;border-radius:12px;border:2px solid transparent;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0;opacity:.85;transition:transform .08s}}
+.rating-row .rate:hover{{opacity:1;transform:scale(1.08)}}
+/* HSB(hue, 50%% sat, 100%% brightness): hue 60 / 90 / 120 → yellow → green */
+.rating-row .rate-hmm{{background:#ffff80}}
+.rating-row .rate-ok{{background:#bfff80}}
+.rating-row .rate-love{{background:#80ff80}}
+.rating-row .rate.rated-on{{opacity:1;border-color:#111;transform:scale(1.12);box-shadow:0 2px 8px rgba(0,0,0,.3)}}
 .price-line{{font-size:1.45em;font-weight:800;line-height:1.1;margin-bottom:3px}}
 .price-line a{{color:#111;text-decoration:none}}
 .price-line a:hover{{text-decoration:underline}}
@@ -394,18 +394,6 @@ h1{{font-size:1.6em;margin-bottom:4px}}
 .act-passed:hover{{background:#fee2e2;border-color:#ef4444}}
 .act-applied:hover{{background:#ede9fe;border-color:#8b5cf6}}
 .act-viewed:hover{{background:#fef3c7;border-color:#f59e0b}}
-.ac-h-rate{{margin-top:9px}}
-.rate-row{{flex-direction:row;flex-wrap:wrap}}
-.rate{{border:1px solid #d1d5db;background:#fff;border-radius:6px;padding:3px 8px;font-size:0.78em;cursor:pointer;color:#374151;white-space:nowrap}}
-.rate:hover{{background:#f3f4f6}}
-.rate{{font-size:1.05em;padding:2px 9px}}
-.rate-love.rated-on{{background:#dcfce7;border-color:#16a34a}}
-.rate-ok.rated-on{{background:#d1fae5;border-color:#10b981}}
-.rate-hmm.rated-on{{background:#fef3c7;border-color:#f59e0b}}
-.rate-no.rated-on{{background:#fee2e2;border-color:#ef4444}}
-.rate.rated-on{{font-weight:700;transform:scale(1.12)}}
-.card[data-rating="love"]{{box-shadow:0 0 0 2px #16a34a inset}}
-.card[data-rating="ok"]{{box-shadow:0 0 0 2px #10b981 inset}}
 .controls{{background:#fff;border-radius:10px;padding:12px 16px;box-shadow:0 1px 4px rgba(0,0,0,.08);margin-bottom:20px;display:flex;flex-wrap:wrap;gap:14px;align-items:center;font-size:0.88em}}
 .controls label{{display:flex;align-items:center;gap:5px;cursor:pointer}}
 .controls .spacer{{flex:1}}
@@ -689,8 +677,8 @@ _EXTRA_COLUMNS = [
 ]
 
 # Allowed user ratings, worst → best. Emoji + label drive the swipe + card buttons.
-RATINGS = ["no", "hmm", "ok", "love"]
-RATING_EMOJI = {"no": "😤", "hmm": "🤔", "ok": "😊", "love": "😍"}
+RATINGS = ["hmm", "ok", "love"]
+RATING_EMOJI = {"hmm": "🤔", "ok": "😊", "love": "😍"}
 
 
 def _db_init_schema(conn):
@@ -2794,10 +2782,9 @@ def _render_card(r, is_new_today=False, interactive=False):
             f'<button class="act" onclick="addNote({rid})">+ note</button>'
             f'</div></div>'
         )
-        # Rating emojis as a pastel vertical column on the right edge of the card.
+        # Rating emojis as a horizontal row in the whitespace at the card bottom.
         rating_col = (
-            f'<div class="rating-col">'
-            f'<button class="rate rate-no{_ron("no")}" title="no" onclick="setRating({rid},\'no\')">😤</button>'
+            f'<div class="rating-row">'
             f'<button class="rate rate-hmm{_ron("hmm")}" title="maybe" onclick="setRating({rid},\'hmm\')">🤔</button>'
             f'<button class="rate rate-ok{_ron("ok")}" title="yes" onclick="setRating({rid},\'ok\')">😊</button>'
             f'<button class="rate rate-love{_ron("love")}" title="love" onclick="setRating({rid},\'love\')">😍</button>'
@@ -2824,7 +2811,6 @@ def _render_card(r, is_new_today=False, interactive=False):
     return (
         f'<div class="card {status}{house_cls}{laundry_cls}{ec_cls}{delisted_cls}" {data_attrs}>'
         f'{delisted_banner}'
-        f'{rating_col}'
         f'{banner_html}'
         f'{media_row}'
         f'<div class="card-body">'
@@ -2834,6 +2820,7 @@ def _render_card(r, is_new_today=False, interactive=False):
         f'{hood_html}'
         f'{amen_commute_html}'
         f'{notes_html}'
+        f'{rating_col}'
         f'</div>'
         f'</div>'
     )

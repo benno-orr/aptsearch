@@ -177,7 +177,6 @@ _CONTROLS = """
         <label class="cbx"><input type="checkbox" class="f-rate" value="love" onchange="applyFilters()">😍</label>
         <label class="cbx"><input type="checkbox" class="f-rate" value="ok" onchange="applyFilters()">😊</label>
         <label class="cbx"><input type="checkbox" class="f-rate" value="hmm" onchange="applyFilters()">🤔</label>
-        <label class="cbx"><input type="checkbox" class="f-rate" value="no" onchange="applyFilters()">😤</label>
         <label class="cbx"><input type="checkbox" class="f-rate" value="" onchange="applyFilters()">unrated</label></div>
       <div class="fp-row"><label>amenities</label>
         <label class="cbx"><input type="checkbox" class="f-amen" value="laundry" onchange="applyFilters()">🧺 laundry</label>
@@ -237,12 +236,11 @@ _CONTROLS = """
 #swipe-card .actions,#swipe-card .ac-h{display:none}
 #swipe-card .amen-commute .ac-col:last-child{display:none}
 .swipe-btns{display:flex;gap:10px;width:100%;max-width:560px;margin-top:14px}
-.swipe-btns button{flex:1;border:none;border-radius:10px;padding:14px 0;font-size:1.6em;font-weight:700;cursor:pointer;color:#fff}
-.sb-no{background:#ef4444}.sb-no:hover{background:#dc2626}
-.sb-hmm{background:#f59e0b}.sb-hmm:hover{background:#d97706}
-.sb-ok{background:#10b981}.sb-ok:hover{background:#059669}
-.sb-love{background:#16a34a}.sb-love:hover{background:#15803d}
-.sb-skip{background:#6b7280;font-size:1em}.sb-skip:hover{background:#4b5563;flex:0 0 80px}
+.swipe-btns button{flex:1;border:none;border-radius:10px;padding:14px 0;font-size:1.6em;font-weight:700;cursor:pointer;color:#111}
+.sb-hmm{background:#ffff80}
+.sb-ok{background:#bfff80}
+.sb-love{background:#80ff80}
+.sb-skip{background:#6b7280;color:#fff;font-size:1em}.sb-skip:hover{background:#4b5563;flex:0 0 80px}
 .swipe-hint{color:#9ca3af;font-size:0.8em;margin-top:10px;text-align:center}
 .swipe-cur{color:#fde68a;font-weight:700;margin-left:8px}
 </style>
@@ -258,13 +256,12 @@ _CONTROLS = """
     <div id="swipe-card"></div>
   </div>
   <div class="swipe-btns">
-    <button class="sb-no"   onclick="swipeRate('no')">😤</button>
     <button class="sb-hmm"  onclick="swipeRate('hmm')">🤔</button>
     <button class="sb-ok"   onclick="swipeRate('ok')">😊</button>
     <button class="sb-love" onclick="swipeRate('love')">😍</button>
     <button class="sb-skip" onclick="swipeNext()">Skip</button>
   </div>
-  <div class="swipe-hint">1 😤&nbsp;&nbsp;2 🤔&nbsp;&nbsp;3 😊&nbsp;&nbsp;4 😍&nbsp;&nbsp;(or ←/→)&nbsp;&nbsp;space Skip&nbsp;&nbsp;Esc Close</div>
+  <div class="swipe-hint">1 🤔&nbsp;&nbsp;2 😊&nbsp;&nbsp;3 😍&nbsp;&nbsp;&nbsp;space Skip&nbsp;&nbsp;Esc Close</div>
 </div>
 <script>
 async function setRating(id, rating, reload) {
@@ -459,11 +456,9 @@ async function swipeRate(rating) {
 document.addEventListener('keydown', function(e) {
   if (!document.getElementById('swipe-overlay').classList.contains('open')) return;
   if (e.key === 'Escape') { closeSwipe(); }
-  else if (e.key === '1')           { swipeRate('no'); }
-  else if (e.key === '2')           { swipeRate('hmm'); }
-  else if (e.key === '3')           { swipeRate('ok'); }
-  else if (e.key === '4')           { swipeRate('love'); }
-  else if (e.key === 'ArrowLeft')   { swipeRate('no'); }
+  else if (e.key === '1')           { swipeRate('hmm'); }
+  else if (e.key === '2')           { swipeRate('ok'); }
+  else if (e.key === '3')           { swipeRate('love'); }
   else if (e.key === 'ArrowRight')  { swipeRate('love'); }
   else if (e.key === ' ')           { swipeNext(); }
   else return;
