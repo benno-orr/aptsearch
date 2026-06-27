@@ -333,8 +333,10 @@ h1{{font-size:1.6em;margin-bottom:4px}}
 .bub-walk{{color:#15803d;border:1px solid #16a34a}}
 .bub-transit{{color:#6d28d9;border:1px solid #7c3aed}}
 .bub-bike{{color:#c2410c;border:1px solid #ea580c}}
-.media-split{{display:flex;flex-direction:column;gap:6px}}
-.media-split > *{{width:100%;min-width:0}}
+.media-split{{display:flex;gap:6px}}
+.media-split > *{{min-width:0}}
+.media-split > .sv-link{{flex:2}}
+.media-split > .minimap-wrap{{flex:1}}
 .media-row .minimap{{width:100%;height:180px;aspect-ratio:auto;margin:0;border-radius:0}}
 .media-row .sv-link{{display:block;width:100%;line-height:0;position:relative}}
 .media-row .streetview{{width:100%;height:180px;object-fit:cover;border-radius:0}}
