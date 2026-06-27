@@ -560,8 +560,9 @@ table.ss td.new-count{{font-weight:700;color:#166534}}
 
   // Street View pan on the grid: animate a 180° sweep (15° steps, pauses at the
   // ends) only while the card is on screen, to limit Static API requests.
-  var svOffsets = []; for (var o = -90; o <= 90; o += 15) svOffsets.push(o);
+  var svOffsets = []; for (var o = -90; o <= 90; o += 5) svOffsets.push(o);
   function svBaseUrl(src) {{ return src.replace(/&heading=\\d+/, ''); }}
+  function svDwell(idx, n) {{ var d = Math.min(idx, n-1-idx); return Math.max(16, 500/Math.pow(2, Math.min(d,6))); }}
   function startSV(img) {{
     if (img.dataset.svAnim) return;
     var base = parseInt(img.dataset.svbase, 10);
@@ -576,10 +577,9 @@ table.ss td.new-count{{font-weight:700;color:#166534}}
       if (i >= heads.length) {{ i = heads.length - 1; dir = -1; }}
       else if (i < 0) {{ i = 0; dir = 1; }}
       img.src = root + '&heading=' + heads[i];
-      var atEnd = (i === 0 || i === heads.length - 1);
-      img._svT = setTimeout(step, atEnd ? 1200 : 240);
+      img._svT = setTimeout(step, svDwell(i, heads.length));
     }}
-    img._svT = setTimeout(step, 500);
+    img._svT = setTimeout(step, svDwell(i, heads.length));
   }}
   function stopSV(img) {{
     if (img._svT) {{ clearTimeout(img._svT); img._svT = null; }}
