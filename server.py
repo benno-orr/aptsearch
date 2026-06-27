@@ -427,22 +427,29 @@ function swipeStreetView(m) {
   const img = document.createElement('img');
   el.appendChild(img);
   const cap = document.createElement('span'); cap.className='sv-cap'; cap.textContent='📷 Street View'; el.appendChild(cap);
-  // gentle pan centered on the building-facing heading: base ±15, ±30
+  // 180° sweep centered on the building, in 15° steps (base-90 … base+90)
   const base = (m.sv_heading == null) ? 0 : m.sv_heading;
-  const offsets = [-30, -15, 0, 15, 30];
-  const headings = offsets.map(o => (base + o + 360) % 360);
+  const offsets = []; for (let o = -90; o <= 90; o += 15) offsets.push(o);
+  const heads = offsets.map(o => (base + o + 360) % 360);
   function url(h) {
     let s = 'https://maps.googleapis.com/maps/api/streetview?size=640x360&location='+m.sv_lat+','+m.sv_lon+
             '&fov=75&source=outdoor&return_error_code=true&key='+m.sv_key;
     if (m.sv_heading != null) s += '&heading='+h;  // omit → API faces the building
     return s;
   }
-  headings.forEach(h => { const p = new Image(); p.src = url(h); }); // preload all frames
-  // ping-pong through the sweep so it pans right then left, centered on the building
-  const seq = headings.concat(headings.slice(1, -1).reverse());
-  let i = 2; img.src = url(headings[2]);  // start centered on the building
-  img.onerror = () => { el.style.display='none'; if (_svTimer) clearInterval(_svTimer); };
-  _svTimer = setInterval(() => { i = (i+1) % seq.length; img.src = url(seq[i]); }, 600);
+  heads.forEach(h => { const p = new Image(); p.src = url(h); }); // preload all frames
+  let i = (heads.length - 1) >> 1, dir = 1;   // start centered on the building
+  img.src = url(heads[i]);
+  img.onerror = () => { el.style.display='none'; if (_svTimer) clearTimeout(_svTimer); };
+  function step() {
+    i += dir;
+    if (i >= heads.length) { i = heads.length - 1; dir = -1; }
+    else if (i < 0) { i = 0; dir = 1; }
+    img.src = url(heads[i]);
+    const atEnd = (i === 0 || i === heads.length - 1);
+    _svTimer = setTimeout(step, atEnd ? 1200 : 230);  // pause at each end of the sweep
+  }
+  _svTimer = setTimeout(step, 500);
 }
 function swipeNext() {
   if (_swipeIdx >= _swipe.length - 1) { closeSwipe(); return; }
@@ -611,7 +618,8 @@ class Handler(BaseHTTPRequestHandler):
             "street_view": track._streetview_url(r, size="640x360"),
             "sv_lat": g("lat"), "sv_lon": g("lon"),
             "sv_key": track._google_key(),
-            "sv_heading": track.streetview_heading(g("lat"), g("lon")),
+            "sv_heading": g("sv_heading") if g("sv_heading") is not None
+                          else track.streetview_heading(g("lat"), g("lon")),
             "lat": g("lat"), "lon": g("lon"),
             "walk": g("walk_min"), "bike": g("bike_min"),
             "routes": routes,

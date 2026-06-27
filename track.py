@@ -338,18 +338,23 @@ h1{{font-size:1.6em;margin-bottom:4px}}
 .media-row .streetview{{width:100%;height:180px;object-fit:cover;border-radius:0}}
 .sv-tag{{position:absolute;left:8px;bottom:8px;background:rgba(0,0,0,.6);color:#fff;font-size:0.66em;font-weight:700;padding:2px 7px;border-radius:6px;line-height:1.4}}
 .card{{position:relative;background:#fff;border-radius:10px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08);border-left:4px solid #e5e7eb}}
-.rating-row{{display:flex;gap:10px;justify-content:center;margin-top:12px;padding-top:10px;border-top:1px solid #f3f4f6}}
-.rating-row .rate{{font-size:1.6em;line-height:1;width:54px;height:48px;border-radius:12px;border:2px solid transparent;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0;opacity:.85;transition:transform .08s}}
-.rating-row .rate:hover{{opacity:1;transform:scale(1.08)}}
+.action-row{{display:flex;align-items:center;justify-content:center;gap:10px;margin-top:12px;padding-top:10px;border-top:1px solid #f3f4f6}}
+.action-row .status-btns,.action-row .rating-btns{{display:flex;gap:8px}}
+.action-dot{{color:#9ca3af;font-weight:700;font-size:1.2em}}
+.action-row .act,.action-row .rate{{font-size:1.5em;line-height:1;width:48px;height:46px;border-radius:12px;border:2px solid transparent;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0;background:#f3f4f6;opacity:.85;transition:transform .08s}}
+.action-row .act:hover,.action-row .rate:hover{{opacity:1;transform:scale(1.08)}}
 /* HSB(hue, 50%% sat, 100%% brightness): hue 60 / 90 / 120 → yellow → green */
-.rating-row .rate-hmm{{background:#ffff80}}
-.rating-row .rate-ok{{background:#bfff80}}
-.rating-row .rate-love{{background:#80ff80}}
-.rating-row .rate.rated-on{{opacity:1;border-color:#111;transform:scale(1.12);box-shadow:0 2px 8px rgba(0,0,0,.3)}}
-.price-line{{font-size:1.45em;font-weight:800;line-height:1.1;margin-bottom:3px}}
+.action-row .rate-hmm{{background:#ffff80}}
+.action-row .rate-ok{{background:#bfff80}}
+.action-row .rate-love{{background:#80ff80}}
+.action-row .rate.rated-on{{opacity:1;border-color:#111;transform:scale(1.12);box-shadow:0 2px 8px rgba(0,0,0,.3)}}
+.card.viewed .act-viewed,.card.applied .act-applied,.card.passed .act-passed{{border-color:#111;opacity:1}}
+.price-line{{font-size:1.45em;font-weight:800;line-height:1.1;margin-bottom:3px;display:flex;align-items:baseline;gap:9px}}
 .price-line a{{color:#111;text-decoration:none}}
 .price-line a:hover{{text-decoration:underline}}
 .price-line .permo{{font-size:0.6em;font-weight:600;color:#6b7280}}
+.price-line .pl-meta{{font-size:0.5em;font-weight:600;color:#6b7280;display:flex;align-items:center;gap:5px}}
+.price-line .pl-avail{{margin-left:auto;color:#6d28d9}}
 .spec-line{{margin-bottom:5px;font-size:0.9em;font-weight:700;display:flex;gap:10px;flex-wrap:wrap}}
 .spec-bba{{color:#1d4ed8}}
 .spec-sqft{{color:#0891b2}}
@@ -552,6 +557,40 @@ table.ss td.new-count{{font-weight:700;color:#166534}}
     }});
   }}, {{rootMargin: '250px'}});
   document.querySelectorAll('.minimap').forEach(function(el){{ io.observe(el); }});
+
+  // Street View pan on the grid: animate a 180° sweep (15° steps, pauses at the
+  // ends) only while the card is on screen, to limit Static API requests.
+  var svOffsets = []; for (var o = -90; o <= 90; o += 15) svOffsets.push(o);
+  function svBaseUrl(src) {{ return src.replace(/&heading=\\d+/, ''); }}
+  function startSV(img) {{
+    if (img.dataset.svAnim) return;
+    var base = parseInt(img.dataset.svbase, 10);
+    if (isNaN(base)) return;
+    img.dataset.svAnim = '1';
+    var root = svBaseUrl(img.getAttribute('src'));
+    var heads = svOffsets.map(function(o) {{ return (base + o + 360) % 360; }});
+    heads.forEach(function(h) {{ var p = new Image(); p.src = root + '&heading=' + h; }});
+    var i = (heads.length - 1) >> 1, dir = 1;
+    function step() {{
+      i += dir;
+      if (i >= heads.length) {{ i = heads.length - 1; dir = -1; }}
+      else if (i < 0) {{ i = 0; dir = 1; }}
+      img.src = root + '&heading=' + heads[i];
+      var atEnd = (i === 0 || i === heads.length - 1);
+      img._svT = setTimeout(step, atEnd ? 1200 : 240);
+    }}
+    img._svT = setTimeout(step, 500);
+  }}
+  function stopSV(img) {{
+    if (img._svT) {{ clearTimeout(img._svT); img._svT = null; }}
+    img.dataset.svAnim = '';
+  }}
+  var svio = new IntersectionObserver(function(entries) {{
+    entries.forEach(function(e) {{
+      if (e.isIntersecting) startSV(e.target); else stopSV(e.target);
+    }});
+  }}, {{rootMargin: '0px', threshold: 0.4}});
+  document.querySelectorAll('img.streetview[data-svbase]').forEach(function(img){{ svio.observe(img); }});
 }})();
 </script>
 </body>
@@ -674,6 +713,7 @@ _EXTRA_COLUMNS = [
     ("sqft",         "INTEGER"),           # square feet
     ("photos",       "TEXT"),              # JSON array of all listing photo URLs
     ("amen_text",    "TEXT"),              # raw amenities text scraped from detail pages
+    ("sv_heading",   "INTEGER"),           # Street View heading (deg) facing the building
 ]
 
 # Allowed user ratings, worst → best. Emoji + label drive the swipe + card buttons.
@@ -2226,6 +2266,26 @@ def compute_missing_commutes(conn, log=print, recompute=False):
     return done
 
 
+def backfill_sv_headings(conn, log=print):
+    """Store the building-facing Street View heading per listing (free metadata
+    calls), so the grid can animate a pan without a lookup per render."""
+    if not _google_key():
+        return 0
+    rows = conn.execute(
+        "SELECT id, lat, lon FROM listings WHERE lat IS NOT NULL "
+        "AND sv_heading IS NULL AND COALESCE(delisted,0)=0").fetchall()
+    n = 0
+    for r in rows:
+        h = streetview_heading(r["lat"], r["lon"])
+        if h is not None:
+            conn.execute("UPDATE listings SET sv_heading=? WHERE id=?", (h, r["id"]))
+            n += 1
+    if n:
+        conn.commit()
+    log(f"  street-view headings filled: {n}")
+    return n
+
+
 def row_commute_html(r):
     """'🚶 18m · 🚲 9m · 🚇 14m · 🚌 22m' chip; ~ prefix when location was approximate."""
     try:
@@ -2696,9 +2756,7 @@ def _render_card(r, is_new_today=False, interactive=False):
         minimap_html = ""
     hood       = classify_neighborhood(r)
     unit_type  = row_unit_type(r)
-    hood_html  = (f'<div class="hood-line">'
-                  f'<span class="utype utype-{unit_type}">{unit_type}</span>'
-                  f'<span class="hood">&#128205; {hood}</span></div>')
+    hood_html  = ""  # neighborhood + unit type now live on the price line
     amen_html  = amenities_html(row_amenities(r))
     commute_block = (f'<div class="ac-col"><div class="ac-h">Commute</div>{commute_col}</div>'
                      if commute_col else "")
@@ -2709,12 +2767,16 @@ def _render_card(r, is_new_today=False, interactive=False):
     unit = row_unit(r)
     if unit and not re.search(r'(?:unit|apt|#)\s*' + re.escape(unit) + r'\b', addr, re.I):
         addr = f"{addr} #{unit}" if addr else f"#{unit}"
-    price_line = (f'<div class="price-line"><a href="{r["url"]}" target="_blank">'
-                  f'{price_str}<span class="permo">/mo</span></a></div>')
+    avail_pl = f'<span class="pl-avail">{avail}</span>' if avail else ""
+    price_line = (
+        f'<div class="price-line">'
+        f'<a href="{r["url"]}" target="_blank">{price_str}<span class="permo">/mo</span></a>'
+        f'<span class="pl-meta"><span class="utype utype-{unit_type}">{unit_type}</span>'
+        f'&#128205; {hood}</span>'
+        f'{avail_pl}</div>'
+    )
     specs_html = row_specs_html(r)
-    avail_span = f'<span class="spec-avail">{avail}</span>' if avail else ""
-    spec_line  = (f'<div class="spec-line">{specs_html}{avail_span}</div>'
-                  if (specs_html or avail_span) else "")
+    spec_line  = f'<div class="spec-line">{specs_html}</div>' if specs_html else ""
     addr_line  = (f'<div class="addr-line"><a href="{r["url"]}" target="_blank">{addr}</a></div>'
                   if addr else "")
     addr_html  = ""  # caption strip removed; price/spec/addr now live in card-body
@@ -2732,9 +2794,11 @@ def _render_card(r, is_new_today=False, interactive=False):
     )
     sv_url  = _streetview_url(r)
     sv_link = _streetview_map_link(r)
+    sv_base = _row_get(r, "sv_heading")
+    sv_base_attr = f' data-svbase="{sv_base}"' if sv_base is not None else ""
     sv_cell = (
         f'<a href="{sv_link}" target="_blank" class="sv-link" title="Open Street View">'
-        f'<img class="streetview" src="{sv_url}" loading="lazy" alt="Street View" '
+        f'<img class="streetview" src="{sv_url}"{sv_base_attr} loading="lazy" alt="Street View" '
         f'onerror="this.closest(&quot;.sv-link&quot;).style.display=&quot;none&quot;">'
         f'<span class="sv-tag">&#128247; Street View</span></a>'
         if sv_url else ""
@@ -2768,35 +2832,32 @@ def _render_card(r, is_new_today=False, interactive=False):
     delisted_cls = " delisted" if is_delisted else ""
     delisted_banner = '<div class="delisted-banner">&#9888; REMOVED BY AUTHOR</div>' if is_delisted else ""
     rating = row_rating(r)
-    actions_col = ""
+    rating_col = ""
     if interactive:
         rid = r["id"]
         def _ron(val):  # mark the currently-selected rating button
             return " rated-on" if rating == val else ""
-        actions_col = (
-            f'<div class="ac-col"><div class="ac-h">Status</div>'
-            f'<div class="actions">'
-            f'<button class="act act-viewed" onclick="setStatus({rid},\'viewed\')">~ viewed</button>'
-            f'<button class="act act-applied" onclick="setStatus({rid},\'applied\')">✓ applied</button>'
-            f'<button class="act act-passed" onclick="setStatus({rid},\'passed\')">✗ pass</button>'
-            f'<button class="act" onclick="addNote({rid})">+ note</button>'
-            f'</div></div>'
-        )
-        # Rating emojis as a horizontal row in the whitespace at the card bottom.
+        # Status emojis + "how much I like" emojis on one bottom row, dot between.
         rating_col = (
-            f'<div class="rating-row">'
+            f'<div class="action-row">'
+            f'<div class="status-btns">'
+            f'<button class="act act-viewed" title="viewed" onclick="setStatus({rid},\'viewed\')">👀</button>'
+            f'<button class="act act-applied" title="applied" onclick="setStatus({rid},\'applied\')">📝</button>'
+            f'<button class="act act-passed" title="pass" onclick="setStatus({rid},\'passed\')">❌</button>'
+            f'<button class="act act-note" title="note" onclick="addNote({rid})">🗒️</button>'
+            f'</div>'
+            f'<span class="action-dot">·</span>'
+            f'<div class="rating-btns">'
             f'<button class="rate rate-hmm{_ron("hmm")}" title="maybe" onclick="setRating({rid},\'hmm\')">🤔</button>'
             f'<button class="rate rate-ok{_ron("ok")}" title="yes" onclick="setRating({rid},\'ok\')">😊</button>'
             f'<button class="rate rate-love{_ron("love")}" title="love" onclick="setRating({rid},\'love\')">😍</button>'
-            f'</div>'
+            f'</div></div>'
         )
-    else:
-        rating_col = ""
     amen = row_amenities(r)
     amen_commute_html = (
         f'<div class="amen-commute">'
         f'<div class="ac-col"><div class="ac-h">Amenities</div>{amen_html}</div>'
-        f'{commute_block}{actions_col}</div>'
+        f'{commute_block}</div>'
     )
     amen_yes = " ".join(k for k, v in amen.items() if v == "yes")
     data_attrs = (
@@ -3730,6 +3791,10 @@ def cmd_daily(args):
         compute_missing_commutes(conn, log=lambda m: print(f"     {m}"))
     except Exception as e:
         print(f"     commute computation failed: {e}")
+    try:
+        backfill_sv_headings(conn, log=lambda m: print(f"     {m}"))
+    except Exception as e:
+        print(f"     street-view heading backfill failed: {e}")
     try:
         backfill_derived(conn)
     except Exception as e:
