@@ -190,8 +190,17 @@ _CONTROLS = """
 .swipe-top{display:flex;justify-content:space-between;align-items:center;width:100%;max-width:560px;color:#e5e7eb;margin-bottom:10px}
 .swipe-top .swipe-count{font-weight:700}
 .swipe-close{background:transparent;border:1px solid #6b7280;color:#e5e7eb;border-radius:6px;padding:4px 10px;cursor:pointer}
-#swipe-card{width:100%;max-width:560px;background:#fff;border-radius:14px;overflow:hidden;box-shadow:0 12px 40px rgba(0,0,0,.5)}
-#swipe-card .minimap{display:none}
+.swipe-stage{width:100%;max-width:600px;display:flex;flex-direction:column;gap:8px}
+#swipe-gallery{display:flex;gap:6px;overflow-x:auto;scroll-snap-type:x mandatory;border-radius:12px;background:#000;min-height:60px}
+#swipe-gallery img{height:300px;width:auto;flex:0 0 auto;object-fit:cover;scroll-snap-align:center}
+#swipe-gallery:empty{display:none}
+#swipe-map{width:100%;height:220px;border-radius:12px;overflow:hidden;background:#e8eaed;position:relative}
+#swipe-sv{width:100%;height:260px;border-radius:12px;overflow:hidden;background:#111;position:relative}
+#swipe-sv img{width:100%;height:100%;object-fit:cover}
+#swipe-sv .sv-cap{position:absolute;left:8px;bottom:8px;background:rgba(0,0,0,.6);color:#fff;font-size:.7em;font-weight:700;padding:2px 7px;border-radius:6px}
+#swipe-card{width:100%;background:#fff;border-radius:14px;overflow:hidden;box-shadow:0 12px 40px rgba(0,0,0,.5)}
+#swipe-card .media-row{display:none}      /* media shown above via gallery/map/SV */
+#swipe-card .rating-col{display:none}      /* rating handled by big buttons below */
 #swipe-card .actions,#swipe-card .ac-h{display:none}
 #swipe-card .amen-commute .ac-col:last-child{display:none}
 .swipe-btns{display:flex;gap:10px;width:100%;max-width:560px;margin-top:14px}
@@ -209,7 +218,12 @@ _CONTROLS = """
     <span class="swipe-count" id="swipe-count"></span>
     <button class="swipe-close" onclick="closeSwipe()">✕ close (Esc)</button>
   </div>
-  <div id="swipe-card"></div>
+  <div class="swipe-stage">
+    <div id="swipe-gallery"></div>
+    <div id="swipe-map"></div>
+    <div id="swipe-sv"></div>
+    <div id="swipe-card"></div>
+  </div>
   <div class="swipe-btns">
     <button class="sb-no"   onclick="swipeRate('no')">😤</button>
     <button class="sb-hmm"  onclick="swipeRate('hmm')">🤔</button>
@@ -228,7 +242,7 @@ async function setRating(id, rating, reload) {
   if (card) {
     card.dataset.rating = rating;
     card.querySelectorAll('.rate').forEach(b => b.classList.remove('rated-on'));
-    const map = {no:'.rate-no', mid:'.rate-mid', nice:'.rate-nice'};
+    const map = {no:'.rate-no', hmm:'.rate-hmm', ok:'.rate-ok', love:'.rate-love'};
     const btn = card.querySelector(map[rating]);
     if (btn) btn.classList.add('rated-on');
   }
@@ -310,7 +324,10 @@ function openSwipe() {
 }
 function closeSwipe() {
   document.getElementById('swipe-overlay').classList.remove('open');
+  if (_svTimer) { clearInterval(_svTimer); _svTimer = null; }
+  if (_swipeMap) { try { _swipeMap.remove(); } catch(e){} _swipeMap = null; }
 }
+let _svTimer = null, _swipeMap = null;
 function swipeRender() {
   const card = _swipe[_swipeIdx];
   document.getElementById('swipe-card').innerHTML = card.outerHTML;
@@ -318,6 +335,62 @@ function swipeRender() {
   document.getElementById('swipe-count').innerHTML =
     (_swipeIdx + 1) + ' / ' + _swipe.length +
     (rated ? '<span class="swipe-cur">rated: ' + rated + '</span>' : '');
+  // reset media panels, then fill from the media API
+  if (_svTimer) { clearInterval(_svTimer); _svTimer = null; }
+  if (_swipeMap) { try { _swipeMap.remove(); } catch(e){} _swipeMap = null; }
+  document.getElementById('swipe-gallery').innerHTML = '';
+  document.getElementById('swipe-map').innerHTML = '';
+  document.getElementById('swipe-sv').innerHTML = '';
+  const id = parseInt(card.dataset.id, 10);
+  fetch('/api/media?id=' + id).then(r => r.json()).then(m => {
+    if (parseInt(_swipe[_swipeIdx].dataset.id, 10) !== id) return; // moved on
+    swipeGallery(m); swipeMap(m); swipeStreetView(m);
+  }).catch(()=>{});
+}
+function swipeGallery(m) {
+  const g = document.getElementById('swipe-gallery');
+  (m.photos || []).forEach(u => {
+    const img = document.createElement('img');
+    img.src = u; img.loading = 'lazy'; img.onerror = () => img.remove();
+    g.appendChild(img);
+  });
+}
+function swipeMap(m) {
+  if (typeof L === 'undefined' || m.lat == null) return;
+  const el = document.getElementById('swipe-map');
+  const map = L.map(el, {zoomControl:false, attributionControl:false, dragging:true, scrollWheelZoom:false});
+  _swipeMap = map;
+  L.tileLayer('https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png', {maxZoom:19, subdomains:'abcd'}).addTo(map);
+  const BROAD = [42.36266, -71.08644];
+  L.marker([m.lat, m.lon]).addTo(map);
+  L.marker(BROAD).bindTooltip('Broad').addTo(map);
+  map.fitBounds([[m.lat, m.lon], BROAD], {padding:[40,40], maxZoom:16});
+  const R = m.routes || {};
+  function line(pts, c) { if (pts && pts.length>1) L.polyline(pts, {color:c, weight:3}).addTo(map); }
+  function transit(segs, c) { if (!segs||!segs.length) return; if (Array.isArray(segs[0])) line(segs,c); else segs.forEach(s=>line(s.pts,c)); }
+  line(R.walk, '#16a34a');
+  // bubbles
+  const bb = document.createElement('div'); bb.className = 'map-bubbles';
+  let html = '';
+  if (m.walk != null) html += '<span class="map-bub bub-walk">🚶 '+m.walk+' min</span>';
+  if (m.bike != null) html += '<span class="map-bub bub-bike">🚴 '+m.bike+' min</span>';
+  bb.innerHTML = html; el.appendChild(bb);
+}
+const SV_HEADINGS = [0,15,30,45,60,75,90,105,120,135,150,165,180,195,210,225,240,255,270,285,300,315,330,345];
+function swipeStreetView(m) {
+  if (!m.sv_key || m.sv_lat == null) return;
+  const el = document.getElementById('swipe-sv');
+  const img = document.createElement('img');
+  el.appendChild(img);
+  const cap = document.createElement('span'); cap.className='sv-cap'; cap.textContent='📷 Street View'; el.appendChild(cap);
+  function url(h) {
+    return 'https://maps.googleapis.com/maps/api/streetview?size=640x360&location='+m.sv_lat+','+m.sv_lon+
+           '&fov=80&source=outdoor&return_error_code=true&heading='+h+'&key='+m.sv_key;
+  }
+  SV_HEADINGS.forEach(h => { const p = new Image(); p.src = url(h); }); // preload
+  let i = 0; img.src = url(SV_HEADINGS[0]);
+  img.onerror = () => { el.style.display='none'; if (_svTimer) clearInterval(_svTimer); };
+  _svTimer = setInterval(() => { i = (i+1) % SV_HEADINGS.length; img.src = url(SV_HEADINGS[i]); }, 220);
 }
 function swipeNext() {
   if (_swipeIdx >= _swipe.length - 1) { closeSwipe(); return; }
@@ -455,8 +528,43 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, build_page())
         elif self.path == "/api/refresh-status":
             self._send(200, json.dumps(REFRESH), "application/json")
+        elif self.path.startswith("/api/media"):
+            self._send(200, json.dumps(self._media()), "application/json")
         else:
             self._send(404, "not found")
+
+    def _media(self):
+        """All photos + map/street-view data for one listing (for swipe mode)."""
+        from urllib.parse import urlparse, parse_qs
+        q = parse_qs(urlparse(self.path).query)
+        try:
+            lid = int(q.get("id", [""])[0])
+        except ValueError:
+            return {}
+        conn = track.db_connect()
+        r = conn.execute("SELECT * FROM listings WHERE id=?", (lid,)).fetchone()
+        if not r:
+            return {}
+        def g(k):
+            try:
+                return r[k]
+            except (KeyError, IndexError):
+                return None
+        routes = {}
+        try:
+            routes = json.loads(r["route_geo"]) if r["route_geo"] else {}
+        except Exception:
+            routes = {}
+        return {
+            "id": lid,
+            "photos": track.row_photos(r),
+            "street_view": track._streetview_url(r, size="640x360"),
+            "sv_lat": g("lat"), "sv_lon": g("lon"),
+            "sv_key": track._google_key(),
+            "lat": g("lat"), "lon": g("lon"),
+            "walk": g("walk_min"), "bike": g("bike_min"),
+            "routes": routes,
+        }
 
     def do_POST(self):
         try:
