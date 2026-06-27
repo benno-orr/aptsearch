@@ -41,7 +41,7 @@ HTML_OUT        = os.path.join(SCRIPT_DIR, "listings.html")
 FB_COOKIES_PATH = os.path.join(SCRIPT_DIR, "fb_cookies.json")   # legacy (pre-profile)
 FB_PROFILE_DIR  = os.path.join(SCRIPT_DIR, ".fb_profile")        # persistent Chrome profile
 
-STATUS_ORDER  = ["new", "viewed", "interested", "applied", "passed"]
+STATUS_ORDER  = ["new", "viewed", "interested", "applied", "passed", "gotaway"]
 STATUS_ICONS  = {"new": "[ ]", "viewed": "[~]", "interested": "[★]", "applied": "[✓]", "passed": "[✗]"}
 STATUS_COLORS = {
     "new":        "\033[0m",
@@ -338,17 +338,21 @@ h1{{font-size:1.6em;margin-bottom:4px}}
 .media-row .streetview{{width:100%;height:180px;object-fit:cover;border-radius:0}}
 .sv-tag{{position:absolute;left:8px;bottom:8px;background:rgba(0,0,0,.6);color:#fff;font-size:0.66em;font-weight:700;padding:2px 7px;border-radius:6px;line-height:1.4}}
 .card{{position:relative;background:#fff;border-radius:10px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08);border-left:4px solid #e5e7eb}}
-.action-row{{display:flex;align-items:center;justify-content:center;gap:10px;margin-top:12px;padding-top:10px;border-top:1px solid #f3f4f6}}
-.action-row .status-btns,.action-row .rating-btns{{display:flex;gap:8px}}
-.action-dot{{color:#9ca3af;font-weight:700;font-size:1.2em}}
-.action-row .act,.action-row .rate{{font-size:1.5em;line-height:1;width:48px;height:46px;border-radius:12px;border:2px solid transparent;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0;background:#f3f4f6;opacity:.85;transition:transform .08s}}
-.action-row .act:hover,.action-row .rate:hover{{opacity:1;transform:scale(1.08)}}
-/* HSB(hue, 50%% sat, 100%% brightness): hue 60 / 90 / 120 → yellow → green */
-.action-row .rate-hmm{{background:#ffff80}}
-.action-row .rate-ok{{background:#bfff80}}
-.action-row .rate-love{{background:#80ff80}}
-.action-row .rate.rated-on{{opacity:1;border-color:#111;transform:scale(1.12);box-shadow:0 2px 8px rgba(0,0,0,.3)}}
-.card.viewed .act-viewed,.card.applied .act-applied,.card.passed .act-passed{{border-color:#111;opacity:1}}
+/* bottom "how much I like" row: ❌ reject + 🤔/😊/😍 */
+.rating-row{{display:flex;justify-content:center;gap:10px;margin-top:12px;padding-top:10px;border-top:1px solid #f3f4f6}}
+.rating-row .rate{{font-size:1.5em;line-height:1;width:50px;height:46px;border-radius:12px;border:2px solid transparent;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0;opacity:.85;transition:transform .08s}}
+.rating-row .rate:hover{{opacity:1;transform:scale(1.08)}}
+/* HSB(hue, 50%% sat, 100%% brightness): hue 0 / 60 / 90 / 120 → red → green */
+.rating-row .rate-pass{{background:#ff8080}}
+.rating-row .rate-hmm{{background:#ffff80}}
+.rating-row .rate-ok{{background:#bfff80}}
+.rating-row .rate-love{{background:#80ff80}}
+.rating-row .rate.rated-on{{opacity:1;border-color:#111;transform:scale(1.12);box-shadow:0 2px 8px rgba(0,0,0,.3)}}
+/* status buttons: a small emoji column to the right of commute */
+.status-col{{display:flex;flex-direction:column;gap:6px}}
+.status-col .act{{font-size:1.15em;width:38px;height:32px;border:1px solid #d1d5db;border-radius:8px;background:#f9fafb;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0;text-align:center}}
+.status-col .act:hover{{background:#eef2ff}}
+.card.viewed .act-viewed,.card.applied .act-applied{{border-color:#111;background:#eef2ff}}
 .price-line{{font-size:1.45em;font-weight:800;line-height:1.1;margin-bottom:3px;display:flex;align-items:baseline;gap:9px}}
 .price-line a{{color:#111;text-decoration:none}}
 .price-line a:hover{{text-decoration:underline}}
@@ -434,7 +438,7 @@ h1{{font-size:1.6em;margin-bottom:4px}}
 .amen-commute{{display:flex;gap:36px;margin:10px 0;align-items:flex-start}}
 .ac-col{{display:flex;flex-direction:column}}
 .ac-h{{font-size:0.66em;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:#9ca3af;margin-bottom:7px}}
-.amenities{{display:flex;flex-direction:column;gap:6px}}
+.amenities{{display:grid;grid-template-columns:1fr 1fr;gap:5px 10px}}
 .am{{display:flex;align-items:center;gap:8px;height:20px;line-height:1}}
 .am-ico{{font-size:1.15em;width:1.4em;text-align:center}}
 .am b{{font-size:1.15em;font-weight:800}}
@@ -562,8 +566,8 @@ table.ss td.new-count{{font-weight:700;color:#166534}}
   // ends) only while the card is on screen, to limit Static API requests.
   var svOffsets = []; for (var o = -90; o <= 90; o += 15) svOffsets.push(o);
   function svBaseUrl(src) {{ return src.replace(/&heading=\\d+/, ''); }}
-  // pendulum easing: fast through the middle, decelerating to the turnarounds
-  function svDwell(idx, n) {{ return Math.min(650, Math.max(120, 130/Math.max(Math.sin(Math.PI*idx/(n-1)),0.2))); }}
+  // fixed time per frame by section: slower middle third, faster outer thirds
+  function svDwell(idx, n) {{ var p = idx/(n-1); return (p >= 1/3 && p <= 2/3) ? 300 : 190; }}
   function startSV(img) {{
     if (img.dataset.svAnim) return;
     var base = parseInt(img.dataset.svbase, 10);
@@ -2628,6 +2632,7 @@ _SECTION_DEFS = [
     ("new",        "New"),
     ("viewed",     "Viewed"),
     ("passed",     "Passed"),
+    ("gotaway",    "Got away"),
 ]
 
 
@@ -2772,12 +2777,12 @@ def _render_card(r, is_new_today=False, interactive=False):
     price_line = (
         f'<div class="price-line">'
         f'<a href="{r["url"]}" target="_blank">{price_str}<span class="permo">/mo</span></a>'
-        f'<span class="pl-meta"><span class="utype utype-{unit_type}">{unit_type}</span>'
-        f'&#128205; {hood}</span>'
+        f'<span class="utype utype-{unit_type} pl-utype">{unit_type}</span>'
         f'{avail_pl}</div>'
     )
     specs_html = row_specs_html(r)
-    spec_line  = f'<div class="spec-line">{specs_html}</div>' if specs_html else ""
+    spec_line  = (f'<div class="spec-line">{specs_html}'
+                  f'<span class="spec-hood">{hood}</span></div>')
     addr_line  = (f'<div class="addr-line"><a href="{r["url"]}" target="_blank">{addr}</a></div>'
                   if addr else "")
     addr_html  = ""  # caption strip removed; price/spec/addr now live in card-body
@@ -2834,31 +2839,35 @@ def _render_card(r, is_new_today=False, interactive=False):
     delisted_banner = '<div class="delisted-banner">&#9888; REMOVED BY AUTHOR</div>' if is_delisted else ""
     rating = row_rating(r)
     rating_col = ""
+    status_col = ""
     if interactive:
         rid = r["id"]
         def _ron(val):  # mark the currently-selected rating button
             return " rated-on" if rating == val else ""
-        # Status emojis + "how much I like" emojis on one bottom row, dot between.
-        rating_col = (
-            f'<div class="action-row">'
-            f'<div class="status-btns">'
+        # Status buttons as a column to the right of commute.
+        status_col = (
+            f'<div class="ac-col"><div class="ac-h">Status</div>'
+            f'<div class="status-col">'
             f'<button class="act act-viewed" title="viewed" onclick="setStatus({rid},\'viewed\')">👀</button>'
             f'<button class="act act-applied" title="applied" onclick="setStatus({rid},\'applied\')">📝</button>'
-            f'<button class="act act-passed" title="pass" onclick="setStatus({rid},\'passed\')">❌</button>'
             f'<button class="act act-note" title="note" onclick="addNote({rid})">🗒️</button>'
-            f'</div>'
-            f'<span class="action-dot">·</span>'
-            f'<div class="rating-btns">'
+            f'<button class="act act-gotaway" title="got away (hide)" onclick="passHide({rid},\'gotaway\')">👋</button>'
+            f'</div></div>'
+        )
+        # Bottom row of "how much I like" emojis; ❌ rejects + hides immediately.
+        rating_col = (
+            f'<div class="rating-row">'
+            f'<button class="rate rate-pass" title="pass / hide" onclick="passHide({rid},\'passed\')">❌</button>'
             f'<button class="rate rate-hmm{_ron("hmm")}" title="maybe" onclick="setRating({rid},\'hmm\')">🤔</button>'
             f'<button class="rate rate-ok{_ron("ok")}" title="yes" onclick="setRating({rid},\'ok\')">😊</button>'
             f'<button class="rate rate-love{_ron("love")}" title="love" onclick="setRating({rid},\'love\')">😍</button>'
-            f'</div></div>'
+            f'</div>'
         )
     amen = row_amenities(r)
     amen_commute_html = (
         f'<div class="amen-commute">'
         f'<div class="ac-col"><div class="ac-h">Amenities</div>{amen_html}</div>'
-        f'{commute_block}</div>'
+        f'{commute_block}{status_col}</div>'
     )
     amen_yes = " ".join(k for k, v in amen.items() if v == "yes")
     data_attrs = (

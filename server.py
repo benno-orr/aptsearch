@@ -290,6 +290,13 @@ async function addNote(id) {
     body: JSON.stringify({id:id, text:text})});
   location.reload();
 }
+async function passHide(id, status) {
+  // hide the card immediately, then persist the status (no reload)
+  const card = document.querySelector('.card[data-id="'+id+'"]');
+  if (card) { card.style.display = 'none'; card.classList.add(status); }
+  await fetch('/api/status', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({id:id, status:status})});
+}
 function toggleFilters() {
   document.getElementById('filters-panel').classList.toggle('open');
 }
@@ -329,7 +336,7 @@ function applyFilters() {
       show = false; hiddenFar++;
     }
     if (houseOnly && !c.classList.contains('is-house')) show = false;
-    if (hidePassed && c.classList.contains('passed')) show = false;
+    if (hidePassed && (c.classList.contains('passed') || c.classList.contains('gotaway'))) show = false;
     c.style.display = show ? '' : 'none';
   });
   document.getElementById('f-hidden-count').textContent =
@@ -438,9 +445,9 @@ function swipeStreetView(m) {
     return s;
   }
   heads.forEach(h => { const p = new Image(); p.src = url(h); }); // preload all frames
-  // pendulum easing: fastest through the middle, decelerating to the turnarounds
-  // (dwell ∝ 1/sin, so frame time grows smoothly toward each edge)
-  const dwell = idx => Math.min(650, Math.max(120, 130/Math.max(Math.sin(Math.PI*idx/(heads.length-1)),0.2)));
+  // fixed time per frame by section: slightly slower in the middle third,
+  // slightly faster through the outer thirds
+  const dwell = idx => { const p = idx/(heads.length-1); return (p >= 1/3 && p <= 2/3) ? 300 : 190; };
   let i = (heads.length - 1) >> 1, dir = 1;   // start centered on the building
   img.src = url(heads[i]);
   img.onerror = () => { el.style.display='none'; if (_svTimer) clearTimeout(_svTimer); };
