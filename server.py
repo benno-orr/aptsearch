@@ -424,21 +424,28 @@ function swipeMap(m) {
   if (m.bike != null) html += '<span class="map-bub bub-bike">🚴 '+m.bike+' min</span>';
   bb.innerHTML = html; el.appendChild(bb);
 }
-const SV_HEADINGS = [0,15,30,45,60,75,90,105,120,135,150,165,180,195,210,225,240,255,270,285,300,315,330,345];
 function swipeStreetView(m) {
   if (!m.sv_key || m.sv_lat == null) return;
   const el = document.getElementById('swipe-sv');
   const img = document.createElement('img');
   el.appendChild(img);
   const cap = document.createElement('span'); cap.className='sv-cap'; cap.textContent='📷 Street View'; el.appendChild(cap);
+  // gentle pan centered on the building-facing heading: base ±15, ±30
+  const base = (m.sv_heading == null) ? 0 : m.sv_heading;
+  const offsets = [-30, -15, 0, 15, 30];
+  const headings = offsets.map(o => (base + o + 360) % 360);
   function url(h) {
-    return 'https://maps.googleapis.com/maps/api/streetview?size=640x360&location='+m.sv_lat+','+m.sv_lon+
-           '&fov=80&source=outdoor&return_error_code=true&heading='+h+'&key='+m.sv_key;
+    let s = 'https://maps.googleapis.com/maps/api/streetview?size=640x360&location='+m.sv_lat+','+m.sv_lon+
+            '&fov=75&source=outdoor&return_error_code=true&key='+m.sv_key;
+    if (m.sv_heading != null) s += '&heading='+h;  // omit → API faces the building
+    return s;
   }
-  SV_HEADINGS.forEach(h => { const p = new Image(); p.src = url(h); }); // preload
-  let i = 0; img.src = url(SV_HEADINGS[0]);
+  headings.forEach(h => { const p = new Image(); p.src = url(h); }); // preload all frames
+  // ping-pong through the sweep so it pans right then left, centered on the building
+  const seq = headings.concat(headings.slice(1, -1).reverse());
+  let i = 2; img.src = url(headings[2]);  // start centered on the building
   img.onerror = () => { el.style.display='none'; if (_svTimer) clearInterval(_svTimer); };
-  _svTimer = setInterval(() => { i = (i+1) % SV_HEADINGS.length; img.src = url(SV_HEADINGS[i]); }, 220);
+  _svTimer = setInterval(() => { i = (i+1) % seq.length; img.src = url(seq[i]); }, 600);
 }
 function swipeNext() {
   if (_swipeIdx >= _swipe.length - 1) { closeSwipe(); return; }
@@ -609,6 +616,7 @@ class Handler(BaseHTTPRequestHandler):
             "street_view": track._streetview_url(r, size="640x360"),
             "sv_lat": g("lat"), "sv_lon": g("lon"),
             "sv_key": track._google_key(),
+            "sv_heading": track.streetview_heading(g("lat"), g("lon")),
             "lat": g("lat"), "lon": g("lon"),
             "walk": g("walk_min"), "bike": g("bike_min"),
             "routes": routes,

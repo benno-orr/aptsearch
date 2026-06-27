@@ -2619,6 +2619,35 @@ def _streetview_map_link(r):
     return "https://www.google.com/maps?q=&layer=c&cbll=" + urllib.parse.quote(q) if q else ""
 
 
+def streetview_heading(lat, lon):
+    """Compass heading that points the Street View camera AT the building: the
+    bearing from the nearest pano (via the metadata endpoint) to lat/lon. Returns
+    None if no key / no imagery / lookup fails."""
+    key = _google_key()
+    if not key or lat is None or lon is None:
+        return None
+    try:
+        url = ("https://maps.googleapis.com/maps/api/streetview/metadata?"
+               + urllib.parse.urlencode({"location": f"{lat},{lon}",
+                                         "source": "outdoor", "key": key}))
+        with urllib.request.urlopen(url, timeout=8) as resp:
+            meta = _json.loads(resp.read().decode("utf-8", "replace"))
+        if meta.get("status") != "OK":
+            return None
+        loc = meta.get("location") or {}
+        plat, plon = loc.get("lat"), loc.get("lng")
+        if plat is None or plon is None:
+            return None
+        from math import radians, degrees, sin, cos, atan2
+        dlon = radians(lon - plon)  # bearing from pano toward the listing
+        y = sin(dlon) * cos(radians(lat))
+        x = (cos(radians(plat)) * sin(radians(lat))
+             - sin(radians(plat)) * cos(radians(lat)) * cos(dlon))
+        return round((degrees(atan2(y, x)) + 360) % 360)
+    except Exception:
+        return None
+
+
 def _render_card(r, is_new_today=False, interactive=False):
     status     = r["status"]
     sc         = neighborhood_score(r["location"] or "")
